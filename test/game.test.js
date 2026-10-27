@@ -298,3 +298,44 @@ test('колоды: достаточно вопросов, у каждого е�
     for (const q of deck.questions) assert.ok(q.length > 10 && q.length < 120, q);
   }
 });
+
+test('персонаж: сохраняется, мусор приводится к допустимому', () => {
+  const { cleanAvatar, AVATAR_SPEC } = require('../server/game');
+  const { room, players } = setup(3);
+  room.setAvatar(players[0].id, { hair: 3, hat: 99, skin: -1, bogus: 5 });
+  const a = room.players.get(players[0].id).avatar;
+  assert.equal(a.hair, 3);
+  assert.equal(a.hat, 0);
+  assert.equal(a.skin, 0);
+  assert.equal(a.bogus, undefined);
+  assert.deepEqual(Object.keys(a).sort(), Object.keys(AVATAR_SPEC).sort());
+  assert.equal(cleanAvatar('строка'), null);
+  const p = room.addPlayer('Новый', { hair: 15, hairColor: 9 });
+  assert.equal(room.view(p.id).players.find((x) => x.id === p.id).avatar.hair, 15);
+});
+
+test('голос: вход, микрофон, выход, отключение', () => {
+  const { room, players } = setup(3);
+  const [a, b] = players;
+  assert.deepEqual(room.voiceJoin(a.id, false), []);
+  assert.deepEqual(room.voiceJoin(b.id, true), [a.id]);
+  assert.equal(room.view(a.id).players.find((p) => p.id === b.id).voice, 'muted');
+  room.voiceMute(b.id, false);
+  assert.equal(room.players.get(b.id).voice, 'on');
+  room.setConnected(b.id, false);
+  assert.equal(room.players.get(b.id).voice, 'off');
+  assert.equal(room.inVoice(b.id), false);
+  room.voiceLeave(a.id);
+  assert.equal(room.inVoice(a.id), false);
+});
+
+test('описание персонажа на клиенте совпадает с сервером', async () => {
+  const { AVATAR_SPEC } = require('../server/game');
+  const mod = await import('../public/avatar.js');
+  assert.deepEqual(mod.SPEC, AVATAR_SPEC);
+  const svg = mod.avatarSVG(mod.randomAvatar());
+  assert.match(svg, /^<svg /);
+  for (const [k, n] of Object.entries(mod.SPEC)) {
+    for (let i = 0; i < n; i++) assert.match(mod.avatarSVG({ ...mod.normalize({}), [k]: i }), /<\/svg>$/);
+  }
+});

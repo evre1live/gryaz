@@ -9,6 +9,18 @@ const TARGETS = [5, 7, 10];
 const TIMES = [45, 60, 90];
 const COLORS = ['#FFB4A2', '#A7C7E7', '#E9D8A6', '#C9B6F2', '#9ED9C8', '#F7C6DD', '#BFD7A5', '#F2C38F', '#B8C0FF', '#F5F0E6'];
 const LETTERS = 'АБВГДЕЖЗИК'.split('');
+// персонаж игрока — набор маленьких чисел (см. public/avatar.js, там же картинки)
+const AVATAR_SPEC = { skin: 8, face: 4, eyes: 8, brows: 6, mouth: 10, hair: 16, hairColor: 10, beard: 6, acc: 10, hat: 12, extra: 6, top: 6, topColor: 8, bg: 8 };
+
+function cleanAvatar(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const [k, n] of Object.entries(AVATAR_SPEC)) {
+    const v = Number(raw[k]);
+    out[k] = Number.isInteger(v) && v >= 0 && v < n ? v : 0;
+  }
+  return out;
+}
 
 const TIMING = {
   autoDrawMs: 30000, // судья не тянет вопрос — тянем за него
@@ -102,7 +114,7 @@ class Room {
 
   // ---------- игроки ----------
 
-  addPlayer(rawName) {
+  addPlayer(rawName, avatar = null) {
     const name = cleanText(rawName, LIMITS.name);
     if (!name) throw new GameError('NAME', 'Введите имя');
     if (this.players.size >= LIMITS.players) throw new GameError('FULL', 'В комнате уже 10 игроков');
@@ -117,7 +129,9 @@ class Room {
       color,
       score: 0,
       connected: true,
-      joinedRound: this.round
+      joinedRound: this.round,
+      avatar: cleanAvatar(avatar),
+      voice: 'off'
     };
     this.players.set(player.id, player);
     this.order.push(player.id);
@@ -135,6 +149,7 @@ class Room {
     const p = this.players.get(id);
     if (!p || p.connected === connected) return;
     p.connected = connected;
+    if (!connected) p.voice = 'off';
     if (id === this.judgeId && this.phase === 'judge') {
       this.judgeOfflineSince = connected ? null : this.now();
     }
@@ -182,6 +197,46 @@ class Room {
     }
     this.touch({ type: 'left', name: p.name });
     if (this.phase === 'write') this.checkAllAnswered();
+  }
+
+  // ---------- персонаж и голос ----------
+
+  setAvatar(id, raw) {
+    const p = this.players.get(id);
+    if (!p) throw new GameError('GONE', 'Вы не в комнате');
+    const a = cleanAvatar(raw);
+    if (!a) throw new GameError('BAD', 'Не получилось сохранить персонажа');
+    p.avatar = a;
+    this.touch({ type: 'avatar', id });
+  }
+
+  voiceJoin(id, muted) {
+    const p = this.players.get(id);
+    if (!p) throw new GameError('GONE', 'Вы не в комнате');
+    p.voice = muted ? 'muted' : 'on';
+    this.touch({ type: 'voice', id, on: true });
+    return this.order.filter((pid) => pid !== id && this.players.get(pid)?.voice !== 'off' && this.players.get(pid)?.connected);
+  }
+
+  voiceLeave(id) {
+    const p = this.players.get(id);
+    if (!p || p.voice === 'off') return;
+    p.voice = 'off';
+    this.touch({ type: 'voice', id, on: false });
+  }
+
+  voiceMute(id, muted) {
+    const p = this.players.get(id);
+    if (!p || p.voice === 'off') return;
+    const next = muted ? 'muted' : 'on';
+    if (p.voice === next) return;
+    p.voice = next;
+    this.touch();
+  }
+
+  inVoice(id) {
+    const p = this.players.get(id);
+    return !!p && p.connected && p.voice !== 'off';
   }
 
   // ---------- настройки и старт ----------
@@ -494,7 +549,7 @@ class Room {
       players: this.order
         .map((pid) => this.players.get(pid))
         .filter(Boolean)
-        .map((p) => ({ id: p.id, name: p.name, color: p.color, score: p.score, connected: p.connected, status: this.statusOf(p) })),
+        .map((p) => ({ id: p.id, name: p.name, color: p.color, score: p.score, connected: p.connected, status: this.statusOf(p), avatar: p.avatar, voice: p.voice })),
       question: this.phase === 'draw' || this.phase === 'lobby' ? null : this.question,
       deadline: this.deadline,
       myAnswer: me && this.answers.has(me.id) ? this.answers.get(me.id).text : null,
@@ -527,4 +582,4 @@ function makeCode(existing, rng = Math.random) {
   throw new GameError('BUSY', 'Сервер переполнен, попробуйте позже');
 }
 
-module.exports = { Room, GameError, makeCode, cleanText, LIMITS, MIN_PLAYERS, TARGETS, TIMES, TIMING };
+module.exports = { Room, GameError, makeCode, cleanText, cleanAvatar, AVATAR_SPEC, LIMITS, MIN_PLAYERS, TARGETS, TIMES, TIMING };

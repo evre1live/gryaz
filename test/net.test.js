@@ -16,7 +16,8 @@ class Client {
     this.msgs = [];
     this.waiters = [];
     this.state = null;
-    this.ws.on('message', (raw) => {
+    this.ws.on('message', (raw, isBinary) => {
+      if (isBinary) return;
       const m = JSON.parse(raw.toString());
       if (m.t === 'state') this.state = m;
       this.msgs.push(m);
@@ -188,6 +189,66 @@ test('по сети: мусорные сообщения не роняют се�
     const evil = await fetch(`http://127.0.0.1:${port}/..%2f..%2fpackage.json`);
     assert.notEqual(evil.status, 200);
     c.close();
+  } finally {
+    await stop();
+  }
+});
+
+test('по сети: голос — знакомство браузеров и ретранслятор', async () => {
+  const { stop, port } = await startServer();
+  try {
+    const a = new Client(port);
+    const b = new Client(port);
+    const c = new Client(port);
+    await Promise.all([a.ready(), b.ready(), c.ready()]);
+    a.send({ t: 'create', name: 'А', avatar: { hair: 4 } });
+    const { code } = await a.wait((m) => m.t === 'joined');
+    b.send({ t: 'join', code, name: 'Б' });
+    c.send({ t: 'join', code, name: 'В' });
+    await a.wait((m) => m.t === 'state' && m.players.length === 3);
+    assert.equal(a.state.players[0].avatar.hair, 4);
+    const aid = a.state.me;
+    const bid = (await b.wait((m) => m.t === 'state')).me;
+
+    a.send({ t: 'voice', a: 'join', muted: false });
+    const ja = await a.wait((m) => m.t === 'voice:joined');
+    assert.deepEqual(ja.peers, []);
+    assert.ok(Array.isArray(ja.ice) && ja.ice.length);
+    b.send({ t: 'voice', a: 'join', muted: false });
+    const jb = await b.wait((m) => m.t === 'voice:joined');
+    assert.deepEqual(jb.peers, [aid]);
+    await c.wait((m) => m.t === 'state' && m.players.filter((p) => p.voice === 'on').length === 2);
+
+    // приглашение WebRTC доходит только адресату
+    b.send({ t: 'voice', a: 'signal', to: aid, data: { sdp: { type: 'offer', sdp: 'v=0' } } });
+    const sig = await a.wait((m) => m.t === 'voice:signal');
+    assert.equal(sig.from, bid);
+    // не в голосе — сигналы не принимаем
+    c.send({ t: 'voice', a: 'signal', to: aid, data: { x: 1 } });
+
+    // ретранслятор: кадр от Б для А
+    const got = new Promise((resolve) => a.ws.once('message', (raw, isBinary) => isBinary && resolve(raw)));
+    const frame = Buffer.concat([Buffer.from([1]), Buffer.from(aid, 'hex'), Buffer.from([10, 20, 30, 40])]);
+    b.ws.send(frame);
+    const raw = await Promise.race([got, new Promise((_, rej) => setTimeout(() => rej(new Error('нет кадра')), 2000))]);
+    assert.equal(raw.subarray(0, 6).toString('hex'), bid);
+    assert.deepEqual([...raw.subarray(6)], [10, 20, 30, 40]);
+
+    // с выключенным микрофоном ретранслятор молчит
+    b.send({ t: 'voice', a: 'mute', muted: true });
+    await a.wait((m) => m.t === 'state' && m.players.find((p) => p.id === bid).voice === 'muted');
+    let leaked = false;
+    const spy = (raw2, isBinary) => { if (isBinary) leaked = true; };
+    a.ws.on('message', spy);
+    b.ws.send(frame);
+    await new Promise((r) => setTimeout(r, 300));
+    a.ws.off('message', spy);
+    assert.equal(leaked, false);
+
+    // ушёл из комнаты — пропал из голоса у всех
+    b.close();
+    await a.wait((m) => m.t === 'state' && m.players.find((p) => p.id === bid).voice === 'off');
+    for (const x of [a, c]) x.close();
   } finally {
     await stop();
   }

@@ -1,5 +1,7 @@
 import { Sound } from './sound.js';
-import { Confetti } from './fx.js';
+import { FX, flyPoint, tilt } from './fx.js';
+import { createVoice } from './voice.js';
+import { avatarSVG, randomAvatar, normalize, SPEC, GROUPS, LABELS, PALETTES } from './avatar.js';
 
 // =====================================================================
 // Утилиты
@@ -36,7 +38,12 @@ const ICONS = {
   close: '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   pencil: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
-  wifi: '<path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12a10 10 0 0 1 13 0"/><path d="M9 15.5a5 5 0 0 1 6 0"/><path d="M12 19h.01"/>'
+  wifi: '<path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12a10 10 0 0 1 13 0"/><path d="M9 15.5a5 5 0 0 1 6 0"/><path d="M12 19h.01"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
+  micOff: '<path d="M9 9v2a3 3 0 0 0 5.1 2.1"/><path d="M15 9.3V6a3 3 0 0 0-5.7-1.3"/><path d="M5 11a7 7 0 0 0 11.6 5.3"/><path d="M19 11a7 7 0 0 1-.7 3"/><path d="M12 18v3"/><path d="M3 3l18 18"/>',
+  hangup: '<path d="M3 15.5c5.5-5 12.5-5 18 0l-2.4 2.4-3.3-1.5v-2.6a11 11 0 0 0-6.6 0v2.6l-3.3 1.5z"/>',
+  dice: '<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor"/>',
+  relay: '<path d="M4 12a8 8 0 0 1 13.7-5.6"/><path d="M20 12a8 8 0 0 1-13.7 5.6"/><path d="M18 3v4h-4"/><path d="M6 21v-4h4"/>'
 };
 
 function fill(el, ...kids) {
@@ -62,8 +69,31 @@ function initials(name) {
   return String(name).trim().slice(0, 2).toUpperCase();
 }
 
+// Персонаж игрока; у старых клиентов без персонажа — инициалы на цветном круге.
 function ava(p, cls = '') {
-  return h('span', { class: `ava ${cls}`.trim(), style: { background: p.color }, 'aria-hidden': 'true' }, initials(p.name));
+  const el = h('span', { class: `ava ${cls}`.trim(), 'aria-hidden': 'true' });
+  if (p.avatar) el.innerHTML = avatarSVG(p.avatar);
+  else {
+    el.style.background = p.color;
+    el.textContent = initials(p.name);
+  }
+  return el;
+}
+
+// Аватарка с кольцом голоса: пульсирует, когда человек говорит, и значком микрофона.
+function avaV(p, cls = '') {
+  const wrap = h('span', { class: 'ava-wrap', 'data-pid': p.id }, ava(p, cls), h('span', { class: 'voice-ring', 'aria-hidden': 'true' }), h('span', { class: 'voice-wave', 'aria-hidden': 'true' }));
+  if (p.voice && p.voice !== 'off') {
+    const relay = S.voice && S.voice.viaRelay(p.id);
+    wrap.append(
+      h(
+        'span',
+        { class: `mic-badge${p.voice === 'muted' ? ' muted' : ''}`, title: p.voice === 'muted' ? 'Микрофон выключен' : relay ? 'Голос через ретранслятор' : 'В голосовом чате' },
+        icon(p.voice === 'muted' ? 'micOff' : relay ? 'relay' : 'mic', 'icon icon-xs')
+      )
+    );
+  }
+  return wrap;
 }
 
 function plural(n, forms) {
@@ -157,8 +187,20 @@ const S = {
   replaced: false,
   drafts: {},
   chosen: null,
-  lastTick: null
+  lastTick: null,
+  avatar: null,
+  voice: null,
+  pending: null
 };
+
+// свой персонаж: сохранён в браузере или придумываем случайного
+S.avatar = (() => {
+  const saved = store.get('gr.avatar');
+  if (saved) return normalize(saved);
+  const a = randomAvatar();
+  store.set('gr.avatar', a);
+  return a;
+})();
 
 const serverNow = () => Date.now() + S.offset;
 const me = () => S.state && S.state.players.find((p) => p.id === S.state.me);
@@ -169,6 +211,7 @@ const isJudge = () => S.state && S.state.room.judgeId === S.state.me;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
   S.ws = ws;
   ws.addEventListener('open', () => {
     if (S.ws !== ws) return;
@@ -180,6 +223,10 @@ function connect() {
     if (S.view && S.view.refresh) S.view.refresh();
   });
   ws.addEventListener('message', (e) => {
+    if (e.data instanceof ArrayBuffer) {
+      S.voice && S.voice.onBinary(new Uint8Array(e.data));
+      return;
+    }
     let m;
     try {
       m = JSON.parse(e.data);
@@ -209,6 +256,31 @@ function send(msg) {
   return false;
 }
 
+// связь голосового чата с сервером игры
+const bus = {
+  send: (msg) => send(msg),
+  sendBinary: (u8) => {
+    if (S.ws && S.ws.readyState === 1 && S.ws.bufferedAmount < 64 * 1024) S.ws.send(u8);
+  },
+  request: (msg, replyType) =>
+    new Promise((resolve) => {
+      if (!send(msg)) return resolve({ ok: false, error: 'Нет связи с сервером' });
+      const timer = setTimeout(() => {
+        S.pending = null;
+        resolve({ ok: false, error: 'Сервер не ответил' });
+      }, 8000);
+      S.pending = { type: replyType, done: (r) => (clearTimeout(timer), (S.pending = null), resolve(r)) };
+    })
+};
+
+S.voice = createVoice(bus, {
+  onChange: (kind) => onVoiceChange(kind),
+  onError: (msg) => {
+    toast(msg, 'error');
+    Sound.play('error');
+  }
+});
+
 function setUrlRoom(code) {
   const url = new URL(location.href);
   if (code) url.searchParams.set('room', code);
@@ -224,17 +296,30 @@ function onMessage(m) {
       S.busy = null;
       S.invite = null;
       setUrlRoom(m.code);
+      // после переподключения сервер забыл голосовой чат — заходим в него снова
+      if (S.voice && S.voice.state.joined) setTimeout(() => S.voice.rejoin(), 300);
+      break;
+    case 'voice:joined':
+      if (S.pending && S.pending.type === 'voice:joined') S.pending.done(m);
+      break;
+    case 'voice:signal':
+      S.voice && S.voice.onSignal(m);
       break;
     case 'state': {
       S.prev = S.state;
       S.state = m;
       S.offset = m.serverNow - Date.now();
+      S.voice && S.voice.sync(m.players);
       render();
       react(m, S.prev);
       break;
     }
     case 'error':
       S.busy = null;
+      if (m.for === 'voice' && S.pending) {
+        S.pending.done({ ok: false, error: m.message });
+        return;
+      }
       if (m.for === 'resume') {
         S.session = null;
         store.del('gr.session');
@@ -267,6 +352,7 @@ function onMessage(m) {
       S.state = null;
       S.prev = null;
       setUrlRoom(null);
+      if (S.voice) S.voice.cleanup();
       render();
       break;
     case 'react':
@@ -287,34 +373,58 @@ function react(st, prev) {
         if (ev.id !== myId) Sound.play('join');
         break;
       case 'drawn':
+        Sound.play('draw');
+        Sound.play('deal', { delay: 0.18 });
+        announce(`Вопрос: ${String(st.question?.text || '').replace(/___/g, 'пропуск')}`);
+        break;
       case 'redrawn':
         Sound.play('deal');
-        announce(`Вопрос: ${String(st.question?.text || '').replace(/___/g, 'пропуск')}`);
+        announce(`Новый вопрос: ${String(st.question?.text || '').replace(/___/g, 'пропуск')}`);
         break;
       case 'answered':
         if (ev.id !== myId) Sound.play('tap');
         break;
       case 'judging':
-        Sound.play('deal');
+        Sound.play('fan');
         break;
-      case 'flip':
+      case 'flip': {
         Sound.play('flip');
+        const card = document.querySelectorAll('.ans .flip')[ev.index];
+        if (card) {
+          const r = card.getBoundingClientRect();
+          setTimeout(() => FX.splash(r.left + r.width / 2, r.top + r.height / 2, { count: 8, power: 0.6, splat: false }), 320);
+        }
         break;
+      }
       case 'picked': {
         const winner = st.players.find((p) => p.id === ev.winnerId);
-        if (ev.winnerId === myId) {
-          Sound.play('win');
-          const r = $('.ans.win')?.getBoundingClientRect();
-          Confetti.burst(r ? r.left + r.width / 2 : innerWidth / 2, r ? r.top + 40 : innerHeight / 2, 110);
-        } else Sound.play('point');
+        Sound.play(ev.winnerId === myId ? 'win' : 'point');
+        Sound.play('stamp', { delay: 0.35 });
+        requestAnimationFrame(() => {
+          const card = $('.ans.win .flip');
+          const r = card?.getBoundingClientRect();
+          if (r) {
+            FX.splash(r.left + r.width / 2, r.top + r.height * 0.4, { count: 26, power: 1.2 });
+            if (ev.winnerId === myId) FX.burst(r.left + r.width / 2, r.top + 40, 110);
+          }
+          flyPoint(card, document.querySelector(`.prow[data-pid="${ev.winnerId}"] .score`));
+        });
         announce(winner ? `Очко получает ${winner.name}` : 'Очко получает игрок, который ушёл');
         break;
       }
+      case 'empty':
+      case 'judge-lost':
+        Sound.play('sad');
+        break;
       case 'final':
         Sound.play('fanfare');
         break;
       case 'round':
-        if (prev.room.phase === 'result' || prev.room.phase === 'lobby' || prev.room.phase === 'final') Sound.play('pop');
+        if (st.room.round === 1 && (prev.room.phase === 'lobby' || prev.room.phase === 'final')) Sound.play('shuffle');
+        else if (prev.room.phase === 'result') Sound.play('select');
+        break;
+      case 'voice':
+        if (ev.id !== myId) Sound.play(ev.on ? 'voice-on' : 'voice-off', { gain: 0.7 });
         break;
       default:
         break;
@@ -357,22 +467,52 @@ function Header() {
   const roundInfo = h('div', { class: 'round-info' });
   const deckChip = h('span', { class: 'chip chip-cream' });
   const soundBtn = h('button', { class: 'icon-btn', type: 'button', onclick: toggleSound });
+  const voiceBtn = h('button', { class: 'icon-btn voice-btn', type: 'button', onclick: toggleVoice });
+  const hangBtn = h(
+    'button',
+    {
+      class: 'icon-btn hang-btn',
+      type: 'button',
+      'aria-label': 'Выйти из голосового чата',
+      title: 'Выйти из голосового чата',
+      onclick: () => {
+        S.voice.leave();
+        Sound.play('voice-off');
+      }
+    },
+    icon('hangup')
+  );
   const el = h(
     'header',
     { class: 'topbar' },
     h('div', { class: 'brand' }, h('img', { src: '/wordmark.svg', alt: 'ГРЯЗЬ', class: 'brand-word', width: 116, height: 43 }), roomChip),
     roundInfo,
-    h('div', { class: 'top-actions' }, deckChip, soundBtn, h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Выйти из комнаты', title: 'Выйти', onclick: confirmLeave }, icon('exit')))
+    h('div', { class: 'top-actions' }, deckChip, h('div', { class: 'voice-ctl', role: 'group', 'aria-label': 'Голосовой чат' }, voiceBtn, hangBtn), soundBtn, h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Выйти из комнаты', title: 'Выйти', onclick: confirmLeave }, icon('exit')))
   );
   const paintSound = () => {
     soundBtn.replaceChildren(icon(Sound.muted ? 'mute' : 'sound'));
-    soundBtn.setAttribute('aria-label', Sound.muted ? 'Включить звук' : 'Выключить звук');
+    soundBtn.setAttribute('aria-label', Sound.muted ? 'Включить звуки игры' : 'Выключить звуки игры');
     soundBtn.setAttribute('aria-pressed', String(!Sound.muted));
   };
+  const paintVoice = () => {
+    const V = S.voice.state;
+    const on = V.joined && !V.muted;
+    voiceBtn.classList.toggle('on', on);
+    voiceBtn.classList.toggle('muted', V.joined && V.muted);
+    voiceBtn.classList.toggle('busy', V.joining);
+    voiceBtn.replaceChildren(V.joining ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : icon(on ? 'mic' : 'micOff'));
+    const label = !V.joined ? 'Включить голосовой чат' : V.muted ? 'Включить микрофон' : 'Выключить микрофон';
+    voiceBtn.setAttribute('aria-label', label);
+    voiceBtn.title = label;
+    voiceBtn.setAttribute('aria-pressed', String(on));
+    hangBtn.hidden = !V.joined;
+  };
   paintSound();
+  paintVoice();
   return {
     el,
     paintSound,
+    paintVoice,
     update(st) {
       fill(roomChip, st.room.hasPassword ? icon('lock', 'icon icon-sm') : null, h('span', { class: 'room-word' }, 'Комната '), st.room.code);
       const deck = st.room.decks.find((d) => d.id === st.room.settings.deck);
@@ -381,6 +521,59 @@ function Header() {
       else roundInfo.replaceChildren(h('b', {}, `Раунд ${st.room.round}`), h('span', {}, `игра до ${st.room.settings.target} ${plural(st.room.settings.target, ['очка', 'очков', 'очков'])}`));
     }
   };
+}
+
+async function toggleVoice() {
+  const V = S.voice.state;
+  Sound.ensure();
+  if (V.joining) return;
+  if (!V.joined) {
+    const r = await S.voice.join();
+    if (r.ok) {
+      Sound.play('voice-on');
+      if (!store.get('gr.voiceHint')) {
+        toast('Голосовой чат включён. В наушниках не будет эха');
+        store.set('gr.voiceHint', 1);
+      }
+    }
+    return;
+  }
+  S.voice.setMuted(!V.muted);
+  Sound.play(V.muted ? 'voice-off' : 'voice-on', { gain: 0.6 });
+}
+
+// кольцо вокруг аватарки следует за громкостью голоса
+let voiceLoopOn = false;
+function voiceLoop() {
+  if (voiceLoopOn) return;
+  voiceLoopOn = true;
+  let lastFrame = 0;
+  const step = (t) => {
+    if (!S.voice || !S.voice.state.joined) {
+      document.querySelectorAll('.ava-wrap.speaking').forEach((el) => el.classList.remove('speaking'));
+      voiceLoopOn = false;
+      return;
+    }
+    if (t - lastFrame > 66) {
+      lastFrame = t;
+      document.querySelectorAll('.ava-wrap[data-pid]').forEach((el) => {
+        const id = el.dataset.pid;
+        const speaking = S.voice.isSpeaking(id);
+        el.classList.toggle('speaking', speaking);
+        const lvl = Math.min(1, S.voice.level(id) * 9);
+        el.style.setProperty('--lvl', speaking ? lvl.toFixed(2) : '0');
+      });
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function onVoiceChange(kind) {
+  if (S.view && S.view.header && S.view.header.paintVoice) S.view.header.paintVoice();
+  if (S.voice.state.joined) voiceLoop();
+  // значок «через ретранслятор» на аватарке меняется без сообщений сервера
+  if (kind === 'state' && S.state && S.view) S.view.update(S.state, S.state);
 }
 
 function toggleSound() {
@@ -459,10 +652,155 @@ function showReplaced() {
   document.body.append(ov);
 }
 
+// ---------- конструктор персонажа ----------
+
+function openAvatarEditor(onSaved) {
+  let cfg = { ...S.avatar };
+  let tab = GROUPS[0].id;
+  const preview = h('div', { class: 'ae-preview-img' });
+  const panel = h('div', { class: 'ae-panel', role: 'tabpanel' });
+  const tabs = h('div', { class: 'ae-tabs', role: 'tablist', 'aria-label': 'Части персонажа' });
+  const paintPreview = (bounce) => {
+    preview.innerHTML = avatarSVG(cfg, { title: 'Ваш персонаж' });
+    if (bounce) {
+      preview.classList.remove('pop');
+      void preview.offsetWidth;
+      preview.classList.add('pop');
+    }
+  };
+  const set = (key, value) => {
+    cfg = { ...cfg, [key]: value };
+    Sound.play('select');
+    paintPreview(true);
+    paintPanel();
+  };
+  function paintTabs() {
+    tabs.replaceChildren(
+      ...GROUPS.map((g) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'tab',
+            'aria-selected': String(g.id === tab),
+            onclick: () => {
+              tab = g.id;
+              paintTabs();
+              paintPanel();
+            }
+          },
+          g.title
+        )
+      )
+    );
+  }
+  function paintPanel() {
+    const group = GROUPS.find((g) => g.id === tab);
+    panel.replaceChildren(
+      ...group.keys.map((key) => {
+        const palette = PALETTES[key];
+        const opts = Array.from({ length: SPEC[key] }, (_, i) => {
+          const picked = cfg[key] === i;
+          if (palette) {
+            return h('button', { type: 'button', class: `ae-swatch${picked ? ' on' : ''}`, style: { background: palette[i] }, 'aria-label': `${LABELS[key]} ${i + 1}`, 'aria-pressed': String(picked), onclick: () => set(key, i) });
+          }
+          const b = h('button', { type: 'button', class: `ae-opt${picked ? ' on' : ''}`, 'aria-label': `${LABELS[key]}: вариант ${i + 1}${i === 0 && ['beard', 'acc', 'hat', 'extra', 'brows'].includes(key) ? ' (без)' : ''}`, 'aria-pressed': String(picked), onclick: () => set(key, i) });
+          b.innerHTML = avatarSVG({ ...cfg, [key]: i });
+          return b;
+        });
+        return h('div', { class: 'ae-row' }, h('span', { class: 'ae-label' }, LABELS[key]), h('div', { class: palette ? 'ae-swatches' : 'ae-opts' }, opts));
+      })
+    );
+  }
+  const dlg = h(
+    'dialog',
+    { class: 'modal ae-modal', 'aria-label': 'Конструктор персонажа' },
+    h('h2', {}, 'Твой персонаж'),
+    h(
+      'div',
+      { class: 'ae-body' },
+      h(
+        'div',
+        { class: 'ae-preview' },
+        preview,
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-sm',
+            onclick: () => {
+              cfg = randomAvatar();
+              Sound.play('deal');
+              paintPreview(true);
+              paintPanel();
+            }
+          },
+          icon('dice'),
+          'Случайный'
+        )
+      ),
+      h('div', { class: 'ae-controls' }, tabs, panel)
+    ),
+    h(
+      'div',
+      { class: 'btn-row ae-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Отмена'),
+      h(
+        'button',
+        {
+          class: 'btn btn-primary',
+          type: 'button',
+          onclick: () => {
+            S.avatar = normalize(cfg);
+            store.set('gr.avatar', S.avatar);
+            if (S.state) send({ t: 'avatar', avatar: S.avatar });
+            Sound.play('confirm');
+            dlg.close();
+            onSaved && onSaved(S.avatar);
+          }
+        },
+        'Готово'
+      )
+    )
+  );
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  paintPreview();
+  paintTabs();
+  paintPanel();
+  dlg.showModal();
+}
+
 // ---------- экран входа ----------
 
 function EntryScreen() {
   const nameIn = h('input', { type: 'text', id: 'name', maxlength: 18, autocomplete: 'nickname', placeholder: 'Как вас называть', value: S.name || '' });
+  const myAva = h('button', { type: 'button', class: 'me-ava', 'aria-label': 'Изменить персонажа', title: 'Изменить персонажа', onclick: () => openAvatarEditor(paintMe) });
+  const paintMe = () => {
+    myAva.innerHTML = avatarSVG(S.avatar);
+    myAva.append(h('span', { class: 'me-ava-edit', 'aria-hidden': 'true' }, icon('pencil', 'icon icon-xs')));
+  };
+  paintMe();
+  const reroll = h(
+    'button',
+    {
+      type: 'button',
+      class: 'icon-btn',
+      'aria-label': 'Случайный персонаж',
+      title: 'Случайный персонаж',
+      onclick: () => {
+        S.avatar = randomAvatar();
+        store.set('gr.avatar', S.avatar);
+        Sound.ensure();
+        Sound.play('deal');
+        paintMe();
+        myAva.classList.remove('pop');
+        void myAva.offsetWidth;
+        myAva.classList.add('pop');
+      }
+    },
+    icon('dice')
+  );
   const pwCreate = h('input', { type: 'password', id: 'pw-create', maxlength: 32, autocomplete: 'new-password', placeholder: 'Можно оставить пустым' });
   let deck = store.get('gr.deck', 'adult');
   const deckBtns = [
@@ -522,7 +860,7 @@ function EntryScreen() {
         Sound.ensure();
         const name = needName();
         if (!name || S.busy) return;
-        if (send({ t: 'create', name, password: pwCreate.value, settings: { deck } })) {
+        if (send({ t: 'create', name, password: pwCreate.value, settings: { deck }, avatar: S.avatar })) {
           S.busy = 'create';
           refresh();
         }
@@ -548,7 +886,7 @@ function EntryScreen() {
           toast('Код комнаты — 4 цифры', 'error');
           return;
         }
-        if (send({ t: 'join', code, password: pwJoin.value, name })) {
+        if (send({ t: 'join', code, password: pwJoin.value, name, avatar: S.avatar })) {
           S.busy = 'join';
           refresh();
         }
@@ -561,6 +899,13 @@ function EntryScreen() {
     joinBtn
   );
 
+  const logoSlot = h('div', { class: 'logo-slot' }, h('img', { src: '/logo.svg', alt: 'ГРЯЗЬ', width: 620, height: 187 }));
+  fetch('/logo-anim.svg')
+    .then((r) => (r.ok ? r.text() : null))
+    .then((svg) => {
+      if (svg && svg.startsWith('<svg')) logoSlot.innerHTML = svg;
+    })
+    .catch(() => {});
   const deco = [
     { pos: { left: '-110px', top: '90px' }, rot: -18, w: 200, c: 'var(--red)', d: 0 },
     { pos: { left: '-70px', top: '600px' }, rot: 12, w: 170, c: 'var(--cream)', d: 1 },
@@ -578,8 +923,8 @@ function EntryScreen() {
     'main',
     { class: 'screen entry' },
     deco,
-    h('div', { class: 'hero' }, h('img', { src: '/logo.svg', alt: 'ГРЯЗЬ', width: 620, height: 187 }), h('p', {}, 'Вопросы — из колоды. Ответы — из вашей головы.')),
-    h('div', { class: 'entry-name' }, h('label', { class: 'field', for: 'name' }, 'Ваше имя', nameIn)),
+    h('div', { class: 'hero' }, logoSlot, h('p', {}, 'Вопросы — из колоды. Ответы — из вашей головы.')),
+    h('div', { class: 'entry-name' }, h('div', { class: 'me-row' }, myAva, h('label', { class: 'field', for: 'name' }, 'Ваше имя', nameIn), reroll)),
     h('div', { class: 'entry-forms' }, createForm, joinForm),
     h(
       'div',
@@ -695,9 +1040,11 @@ function LobbyScreen() {
             'div',
             { class: `seat${p.id === st.me ? ' me' : ''}${p.connected ? '' : ' away'}`, style: { animationDelay: fresh ? `${i * 0.05}s` : '0s', animationDuration: fresh ? null : '1ms' } },
             host && p.id !== st.me ? h('button', { class: 'kick', type: 'button', 'aria-label': `Исключить ${p.name}`, title: 'Исключить', onclick: () => confirmKick(p) }, icon('close', 'icon icon-sm')) : null,
-            h('div', { class: 'ava-wrap' }, ava(p, 'ava-lg'), p.id === st.room.hostId ? crown() : null),
+            h('div', { class: 'seat-ava' }, avaV(p, 'ava-lg'), p.id === st.room.hostId ? crown() : null),
             h('span', { class: 'name' }, p.name),
-            h('span', { class: 'note' }, p.id === st.me ? 'это вы' : p.connected ? (p.id === st.room.hostId ? 'хозяин' : 'за столом') : 'не в сети')
+            p.id === st.me
+              ? h('button', { type: 'button', class: 'seat-edit', onclick: () => openAvatarEditor() }, icon('pencil', 'icon icon-xs'), 'Изменить персонажа')
+              : h('span', { class: 'note' }, p.connected ? (p.id === st.room.hostId ? 'хозяин' : 'за столом') : 'не в сети')
           );
         }),
         ...Array.from({ length: Math.max(0, Math.min(st.room.maxPlayers, Math.max(st.room.minPlayers, st.players.length + 2)) - st.players.length) }, () =>
@@ -782,6 +1129,7 @@ function Timer() {
     const sec = Math.ceil(left / 1000);
     num.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
     el.classList.toggle('urgent', sec <= 10 && sec > 0);
+    document.body.classList.toggle('hurry', !!(cfg.tick && sec <= 5 && sec > 0 && cfg.tick()));
     if (sec !== lastSec) {
       if (sec <= 5 && sec > 0 && cfg.tick && cfg.tick()) Sound.play('tick');
       ring.setAttribute('aria-label', `Осталось ${sec} ${plural(sec, ['секунда', 'секунды', 'секунд'])}`);
@@ -794,10 +1142,12 @@ function Timer() {
     set(next) {
       cfg = next;
       el.hidden = !next;
+      if (!next) document.body.classList.remove('hurry');
       if (next && !raf) raf = requestAnimationFrame(frame);
     },
     stop() {
       cfg = null;
+      document.body.classList.remove('hurry');
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     }
@@ -833,8 +1183,8 @@ function PlayersList() {
           const s = statusText(p, st);
           return h(
             'div',
-            { class: `prow${p.id === st.me ? ' me' : ''}${p.status === 'judge' ? ' judge' : ''}${p.connected ? '' : ' away'}` },
-            ava(p),
+            { class: `prow${p.id === st.me ? ' me' : ''}${p.status === 'judge' ? ' judge' : ''}${p.connected ? '' : ' away'}`, 'data-pid': p.id },
+            avaV(p),
             h(
               'div',
               { class: 'info' },
@@ -863,7 +1213,7 @@ function QuestionCard(q, cls = '') {
 // Розыгрыш: колода → вопрос → ответы.
 function PlayStage() {
   const deck = h('div', { class: 'deck' }, h('div', { class: 'dc' }), h('div', { class: 'dc' }));
-  const qslot = h('div', { class: 'qslot' }, deck);
+  const qslot = tilt(h('div', { class: 'qslot' }, deck));
   const aslot = h('div', { class: 'aslot' });
   const el = h('div', { class: 'play' }, qslot, aslot);
   let deckTop = null;
@@ -896,6 +1246,11 @@ function PlayStage() {
     }
     deck.classList.toggle('waiting', want === 'wait');
     deck.append(deckTop);
+    if (st.room.phase === 'draw' && st.room.round === 1 && !deck.dataset.riffled) {
+      deck.dataset.riffled = '1';
+      deck.classList.add('riffle');
+      setTimeout(() => deck.classList.remove('riffle'), 1400);
+    }
   }
 
   function paintQuestion(st, prev) {
@@ -996,7 +1351,7 @@ function AnswerEditor(st) {
     ta,
     h('div', { class: 'meta' }, h('span', {}, 'Судья не увидит, чей ответ'), count)
   );
-  const el = h('div', { style: { display: 'contents' } }, card, h('div', { class: 'btn-row' }, clear, submit));
+  const el = h('div', { style: { display: 'contents' } }, tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, clear, submit));
   const paint = () => {
     const n = ta.value.length;
     count.textContent = `${n} / 90`;
@@ -1011,7 +1366,11 @@ function AnswerEditor(st) {
       return;
     }
     Sound.ensure();
-    if (send({ t: 'submit', text })) Sound.play('place');
+    if (send({ t: 'submit', text })) {
+      Sound.play('place');
+      const r = card.getBoundingClientRect();
+      FX.splash(r.left + r.width / 2, r.top + r.height * 0.75, { count: 16, power: 0.9 });
+    }
   };
   ta.addEventListener('input', paint);
   ta.addEventListener('keydown', (e) => {
@@ -1047,7 +1406,7 @@ function PlacedAnswer() {
     icon('pencil'),
     'Изменить'
   );
-  const el = h('div', { style: { display: 'contents' } }, card, h('div', { class: 'btn-row' }, edit));
+  const el = h('div', { style: { display: 'contents' } }, tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, edit));
   return {
     el,
     update(st) {
@@ -1111,7 +1470,7 @@ function RevealStage(st0) {
       const flip = h('button', { class: 'flip', type: 'button', 'aria-label': `Перевернуть ответ ${c.letter}` }, h('div', { class: 'inner' }, back, front));
       const action = h('button', { class: 'btn btn-block', type: 'button' });
       const who = h('div', { class: 'who' });
-      const box = h('div', { class: 'ans', style: { animationDelay: `${i * 0.12}s` } }, flip, action, who);
+      const box = tilt(h('div', { class: 'ans', style: { animationDelay: `${i * 0.12}s` } }, flip, action, who), 5);
       const item = { c, box, flip, textEl, mineTag, meta: front.querySelector('.meta span'), front, action, who, flipped: null };
       flip.addEventListener('click', () => {
         if (!item.flipped) send({ t: 'flip', index: i });
@@ -1285,7 +1644,7 @@ function GameScreen() {
     sub.classList.toggle('hot', judge);
     subWrap.firstElementChild.textContent = `Раунд ${st.room.round} · `;
     if (ph === 'draw') {
-      sub.textContent = judge ? `Ты судья раунда ${st.room.round}` : `Раунд ${st.room.round} · судья ${jn}`;
+      sub.textContent = judge ? 'Ты судья этого раунда' : `Судья — ${jn}`;
       title.textContent = judge ? 'Тяни вопрос из колоды' : `${jn} тянет вопрос`;
     } else if (ph === 'write') {
       sub.textContent = judge ? 'Ты судья — сегодня не пишешь' : `Судья — ${jn}`;
@@ -1297,7 +1656,7 @@ function GameScreen() {
       else title.textContent = left ? `${jn} читает ответы` : `${jn} выбирает лучший ответ`;
     } else if (ph === 'result') {
       const r = st.result || {};
-      sub.textContent = `Раунд ${st.room.round}`;
+      sub.textContent = 'Итоги раунда';
       if (r.judgeLost) title.textContent = 'Судья пропал — раунд без очков';
       else if (r.empty || !r.winnerId) title.textContent = 'Никто не успел ответить';
       else if (r.winnerId === st.me) title.textContent = 'Твой ответ победил! +1 очко';
@@ -1384,7 +1743,7 @@ function FinalScreen() {
   const eyebrow = h('span', { class: 'eyebrow' });
   const titleEl = h('h1', {});
   const subEl = h('p', {});
-  const pair = h('div', { class: 'pair' });
+  const pair = tilt(h('div', { class: 'pair' }), 6);
   const board = h('ol', { class: 'board' });
   const actions = h('div', { class: 'btn-row' });
   const el = h(
@@ -1419,7 +1778,7 @@ function FinalScreen() {
             'li',
             { class: i === 0 ? 'first' : '', style: { animationDelay: `${0.3 + i * 0.08}s` } },
             h('span', { class: 'rk' }, String(i + 1)),
-            ava(p),
+            avaV(p),
             h('span', { class: 'nm' }, p.name, p.id === st.me ? ' (вы)' : ''),
             h('span', { class: 'sc' }, String(p.score))
           )
@@ -1436,15 +1795,15 @@ function FinalScreen() {
       }
       if (!celebrated) {
         celebrated = true;
-        Confetti.rain(iWon ? 6000 : 3500);
+        FX.rain(iWon ? 6000 : 3500);
         setTimeout(() => {
           const r = pair.getBoundingClientRect();
-          Confetti.burst(r.width ? r.left + r.width / 2 : innerWidth / 2, r.width ? r.top + 40 : innerHeight / 2, 90);
+          FX.burst(r.width ? r.left + r.width / 2 : innerWidth / 2, r.width ? r.top + 40 : innerHeight / 2, 90);
         }, 500);
       }
     },
     destroy() {
-      Confetti.stop();
+      FX.stop();
     }
   };
 }

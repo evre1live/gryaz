@@ -8,6 +8,19 @@ const { Room, GameError, makeCode, cleanText, LIMITS } = require('./game');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ROOM_IDLE_MS = 15 * 60 * 1000; // пустая комната живёт 15 минут
+const STUN = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'];
+
+// Если задан TURN (переменные окружения на Render), браузеры чаще соединяются напрямую.
+// Без него голос, который не прошёл напрямую, идёт через сам сервер игры (ретранслятор).
+function iceServers() {
+  const list = [{ urls: STUN }];
+  if (process.env.TURN_URL) {
+    list.push({ urls: process.env.TURN_URL.split(',').map((u) => u.trim()), username: process.env.TURN_USERNAME || '', credential: process.env.TURN_CREDENTIAL || '' });
+  }
+  return list;
+}
+
+const idBytes = (hex) => Buffer.from(hex, 'hex');
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -54,7 +67,7 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
     });
   });
 
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 
   function send(ws, msg) {
     if (ws.readyState === 1) ws.send(JSON.stringify(msg));
@@ -104,7 +117,7 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
           const s = msg.settings;
           if (['clean', 'adult'].includes(s.deck)) room.settings.deck = s.deck;
         }
-        const player = room.addPlayer(msg.name);
+        const player = room.addPlayer(msg.name, msg.avatar);
         attach(ws, room, player);
         return;
       }
@@ -112,7 +125,7 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
         const room = getRoom(msg.code);
         if (!room) throw new GameError('NO_ROOM', 'Комнаты с таким кодом нет');
         if (!room.checkPassword(msg.password)) throw new GameError('BAD_PASSWORD', 'Неверный пароль');
-        const player = room.addPlayer(msg.name);
+        const player = room.addPlayer(msg.name, msg.avatar);
         attach(ws, room, player);
         return;
       }
@@ -172,6 +185,10 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
       }
       case 'lobby':
         return room.toLobby(id);
+      case 'avatar':
+        return room.setAvatar(id, msg.avatar);
+      case 'voice':
+        return handleVoice(ws, room, id, msg);
       case 'react': {
         const emoji = ['laugh', 'fire', 'skull', 'clap'].includes(msg.kind) ? msg.kind : null;
         if (!emoji) return;
@@ -192,21 +209,71 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
     }
   }
 
+  function socketsOf(room, playerId) {
+    const out = [];
+    for (const [other, o] of sockets) if (o.roomCode === room.code && o.playerId === playerId) out.push(other);
+    return out;
+  }
+
+  function handleVoice(ws, room, id, msg) {
+    switch (msg.a) {
+      case 'join': {
+        const peers = room.voiceJoin(id, !!msg.muted);
+        send(ws, { t: 'voice:joined', ok: true, me: id, peers, ice: iceServers() });
+        return;
+      }
+      case 'leave':
+        return room.voiceLeave(id);
+      case 'mute':
+        return room.voiceMute(id, !!msg.muted);
+      case 'signal': {
+        const to = String(msg.to || '');
+        if (!room.inVoice(id) || !room.inVoice(to) || !msg.data || typeof msg.data !== 'object') return;
+        for (const other of socketsOf(room, to)) send(other, { t: 'voice:signal', from: id, data: msg.data });
+        return;
+      }
+      default:
+        throw new GameError('BAD', 'Неизвестная команда голоса');
+    }
+  }
+
+  // ретранслятор: [число адресатов][по 6 байт на адресата][звук] → каждому [6 байт отправителя][звук]
+  function relayAudio(ws, data) {
+    const info = sockets.get(ws);
+    if (!info || !info.playerId) return;
+    const room = getRoom(info.roomCode);
+    if (!room || !room.inVoice(info.playerId) || room.players.get(info.playerId).voice === 'muted') return;
+    const t = now();
+    info.vbucket = Math.min(80, info.vbucket + ((t - info.vlast) / 1000) * 40);
+    info.vlast = t;
+    if (info.vbucket < 1) return;
+    info.vbucket -= 1;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.concat(data);
+    const n = buf[0];
+    const head = 1 + n * 6;
+    if (!n || n > 9 || buf.length <= head || buf.length - head > 2048) return;
+    const audio = buf.subarray(head);
+    const out = Buffer.concat([idBytes(info.playerId), audio]);
+    for (let i = 0; i < n; i++) {
+      const to = buf.subarray(1 + i * 6, 7 + i * 6).toString('hex');
+      if (to === info.playerId || !room.inVoice(to)) continue;
+      for (const other of socketsOf(room, to)) if (other.readyState === 1) other.send(out, { binary: true });
+    }
+  }
+
   wss.on('connection', (ws) => {
-    sockets.set(ws, { roomCode: null, playerId: null, alive: true, bucket: 30, last: now() });
+    sockets.set(ws, { roomCode: null, playerId: null, alive: true, bucket: 30, last: now(), vbucket: 80, vlast: now(), sbucket: 120, slast: now() });
     ws.on('pong', () => {
       const info = sockets.get(ws);
       if (info) info.alive = true;
     });
-    ws.on('message', (raw) => {
+    ws.on('message', (raw, isBinary) => {
       const info = sockets.get(ws);
       if (!info) return;
-      // простой ограничитель: 30 сообщений с пополнением 15 в секунду
-      const t = now();
-      info.bucket = Math.min(30, info.bucket + ((t - info.last) / 1000) * 15);
-      info.last = t;
-      if (info.bucket < 1) return;
-      info.bucket -= 1;
+      if (isBinary) {
+        relayAudio(ws, raw);
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(raw.toString());
@@ -214,6 +281,20 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
         return;
       }
       if (!msg || typeof msg.t !== 'string') return;
+      const t = now();
+      if (msg.t === 'voice' && msg.a === 'signal') {
+        // знакомство браузеров шлёт пачку сообщений сразу — у него свой запас
+        info.sbucket = Math.min(120, info.sbucket + ((t - info.slast) / 1000) * 40);
+        info.slast = t;
+        if (info.sbucket < 1) return;
+        info.sbucket -= 1;
+      } else {
+        // простой ограничитель: 30 сообщений с пополнением 15 в секунду
+        info.bucket = Math.min(30, info.bucket + ((t - info.last) / 1000) * 15);
+        info.last = t;
+        if (info.bucket < 1) return;
+        info.bucket -= 1;
+      }
       try {
         handle(ws, msg);
       } catch (err) {
