@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F0F11">
+<title>ГРЯЗЬ — игра для компании</title>
+<meta name="description" content="Вопросы — из колоды. Ответы — из вашей головы. Онлайн-игра для компании от 3 до 10 человек.">
+<meta property="og:title" content="ГРЯЗЬ — игра для компании">
+<meta property="og:description" content="Вопросы — из колоды. Ответы — из вашей головы.">
+<meta property="og:image" content="/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Golos+Text:wght@400;500;600;700&family=Unbounded:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<div id="net" class="net" hidden>Связь потеряна — переподключаемся…</div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<div id="sr" class="sr-only" aria-live="assertive"></div>
+<div id="reactions" class="reactions-layer" aria-hidden="true"></div>
+<canvas id="fx" class="fx" aria-hidden="true"></canvas>
+<noscript>Для игры нужен JavaScript.</noscript>
+</body>
+</html>

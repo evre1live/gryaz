@@ -1,0 +1,17 @@
+{
+  "name": "gryaz",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ГРЯЗЬ — онлайн-игра для компании: вопросы из колоды, ответы пишете сами",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
