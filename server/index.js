@@ -29,8 +29,13 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
-  '.json': 'application/json; charset=utf-8'
+  '.json': 'application/json; charset=utf-8',
+  '.mp3': 'audio/mpeg',
+  '.txt': 'text/plain; charset=utf-8'
 };
+// код и разметка всегда сверяются с сервером (после обновления у всех сразу новая версия),
+// звуки и картинки можно держать в кэше подольше
+const LONG_CACHE = new Set(['.mp3', '.png', '.svg', '.ico']);
 
 function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
   const rooms = new Map();
@@ -51,19 +56,34 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
       res.end();
       return;
     }
-    fs.readFile(file, (err, data) => {
-      if (err) {
+    fs.stat(file, (statErr, st) => {
+      if (statErr || !st.isFile()) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('Не найдено');
         return;
       }
       const ext = path.extname(file);
-      res.writeHead(200, {
+      const etag = `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
+      const headers = {
         'content-type': MIME[ext] || 'application/octet-stream',
-        'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+        'cache-control': LONG_CACHE.has(ext) ? 'public, max-age=86400' : 'no-cache',
+        etag,
         'x-content-type-options': 'nosniff'
+      };
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, headers);
+        res.end();
+        return;
+      }
+      fs.readFile(file, (err, data) => {
+        if (err) {
+          res.writeHead(500);
+          res.end();
+          return;
+        }
+        res.writeHead(200, headers);
+        res.end(data);
       });
-      res.end(data);
     });
   });
 
