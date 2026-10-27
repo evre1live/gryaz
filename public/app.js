@@ -105,6 +105,15 @@ function plural(n, forms) {
   return forms[2];
 }
 
+// Ответ внутри фразы: в середине — со строчной, после кавычки и в начале — как на карте.
+function fitAnswer(before, answer) {
+  const a = String(answer || '');
+  if (a.length < 2 || a[1] !== a[1].toLowerCase()) return a;
+  const prev = before.replace(/\s+$/, '').slice(-1);
+  if (!prev || '«"(.!?'.includes(prev)) return a;
+  return a[0].toLowerCase() + a.slice(1);
+}
+
 // Текст вопроса: «___» превращаем в линию; можно подставить ответ.
 function questionNodes(text, fill) {
   const parts = String(text).split('___');
@@ -121,7 +130,7 @@ function questionNodes(text, fill) {
       const tail = next.match(/^\S*/)[0];
       parts[i + 1] = next.slice(tail.length);
       out.push(body);
-      out.push(h('span', { class: 'nowrap' }, lead, fill ? h('q', {}, fill) : h('span', { class: 'blank', 'aria-label': 'пропуск' }), tail));
+      out.push(h('span', { class: 'nowrap' }, lead, fill ? h('q', {}, fitAnswer(body + lead, fill)) : h('span', { class: 'blank', 'aria-label': 'пропуск' }), tail));
     } else out.push(body);
   });
   if (fill && parts.length === 1) out.push(' — ', h('q', {}, fill));
@@ -185,7 +194,8 @@ const S = {
   invite: (new URLSearchParams(location.search).get('room') || '').replace(/\D/g, '').slice(0, 4) || null,
   inviteInfo: null,
   replaced: false,
-  drafts: {},
+  seenCards: new Set(),
+  hotkeys: null,
   chosen: null,
   lastTick: null,
   avatar: null,
@@ -383,6 +393,9 @@ function react(st, prev) {
         break;
       case 'answered':
         if (ev.id !== myId) Sound.play('tap');
+        break;
+      case 'swapped':
+        if (ev.id === myId) Sound.play('shuffle');
         break;
       case 'judging':
         Sound.play('fan');
@@ -923,14 +936,14 @@ function EntryScreen() {
     'main',
     { class: 'screen entry' },
     deco,
-    h('div', { class: 'hero' }, logoSlot, h('p', {}, 'Вопросы — из колоды. Ответы — из вашей головы.')),
+    h('div', { class: 'hero' }, logoSlot, h('p', {}, 'Вопросы — из колоды. Ответы — у тебя на руках.')),
     h('div', { class: 'entry-name' }, h('div', { class: 'me-row' }, myAva, h('label', { class: 'field', for: 'name' }, 'Ваше имя', nameIn), reroll)),
     h('div', { class: 'entry-forms' }, createForm, joinForm),
     h(
       'div',
       { class: 'rules', 'aria-label': 'Как играть' },
       h('div', { class: 'rule' }, h('b', {}, '1'), h('span', {}, 'Игроки по очереди тянут вопрос и становятся судьёй раунда.')),
-      h('div', { class: 'rule' }, h('b', {}, '2'), h('span', {}, 'Остальные пишут ответ своими словами — никаких готовых карт.')),
+      h('div', { class: 'rule' }, h('b', {}, '2'), h('span', {}, 'У каждого на руках 6 карт с ответами — выбери самую смешную.')),
       h('div', { class: 'rule' }, h('b', {}, '3'), h('span', {}, 'Судья читает ответы без имён и выбирает самый смешной.'))
     ),
     h('p', { class: 'entry-foot' }, 'От 3 до 10 игроков · удобно играть с телефона')
@@ -977,7 +990,7 @@ function LobbyScreen() {
   const notice = h('div', { class: 'notice', hidden: true });
   const deckSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Колода' });
   const targetPills = h('div', { class: 'pills', role: 'group', 'aria-label': 'Играем до' });
-  const timePills = h('div', { class: 'pills', role: 'group', 'aria-label': 'Время на ответ' });
+  const timePills = h('div', { class: 'pills', role: 'group', 'aria-label': 'Время на выбор карты' });
   const startBtn = h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'button', onclick: () => send({ t: 'start' }) }, 'Начать партию');
   const hint = h('p', { class: 'foot-hint' });
   let lastIds = new Set();
@@ -1012,7 +1025,7 @@ function LobbyScreen() {
         h('h2', {}, 'Настройки партии'),
         h('div', { class: 'group' }, h('span', {}, 'Колода'), deckSeg),
         h('div', { class: 'group' }, h('span', {}, 'Играем до'), targetPills),
-        h('div', { class: 'group' }, h('span', {}, 'Время на ответ'), timePills),
+        h('div', { class: 'group' }, h('span', {}, 'Время на выбор карты'), timePills),
         startBtn,
         hint
       )
@@ -1158,8 +1171,8 @@ function statusText(p, st) {
   if (!p.connected) return { cls: '', node: 'Не в сети' };
   const ph = st.room.phase;
   if (p.status === 'judge') return { cls: 'judge', node: ph === 'draw' ? 'Тянет вопрос · судья' : 'Судья раунда' };
-  if (ph === 'write' && p.status === 'ready') return { cls: 'ready', node: [icon('check', 'icon icon-sm'), 'Ответ на столе'] };
-  if (ph === 'write') return { cls: '', node: ['Пишет', h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'))] };
+  if (ph === 'write' && p.status === 'ready') return { cls: 'ready', node: [icon('check', 'icon icon-sm'), 'Карта на столе'] };
+  if (ph === 'write') return { cls: '', node: ['Выбирает', h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'))] };
   if (ph === 'draw') return { cls: '', node: 'Ждёт вопрос' };
   return { cls: '', node: '' };
 }
@@ -1210,16 +1223,19 @@ function QuestionCard(q, cls = '') {
   );
 }
 
-// Розыгрыш: колода → вопрос → ответы.
+// Розыгрыш: колода → вопрос → карта из руки.
 function PlayStage() {
   const deck = h('div', { class: 'deck' }, h('div', { class: 'dc' }), h('div', { class: 'dc' }));
   const qslot = tilt(h('div', { class: 'qslot' }, deck));
   const aslot = h('div', { class: 'aslot' });
-  const el = h('div', { class: 'play' }, qslot, aslot);
+  const hand = HandZone((id) => onPick(id));
+  const el = h('div', { class: 'play' }, qslot, aslot, hand.el);
   let deckTop = null;
   let qKey = null;
-  let aMode = null;
+  let qFill = null;
+  let aKey = null;
   let answerUI = null;
+  let sel = null; // карта, которую примеряем к вопросу
 
   function paintDeck(st) {
     const judge = isJudge() && st.room.phase === 'draw';
@@ -1253,27 +1269,82 @@ function PlayStage() {
     }
   }
 
+  // текст карты, которая сейчас стоит в пропуске вопроса
+  function fillText(st) {
+    const id = sel || st.myCard;
+    const c = id && st.myHand.find((x) => x.id === id);
+    return c ? c.text : null;
+  }
+
   function paintQuestion(st, prev) {
     const q = st.question;
     const key = q ? `${q.deck}:${q.no}` : null;
-    if (key === qKey) return;
-    qKey = key;
-    qslot.querySelector('.qcard')?.remove();
+    if (key !== qKey) {
+      qKey = key;
+      qFill = null;
+      qslot.querySelector('.qcard')?.remove();
+      if (!q) return;
+      const fromDeck = prev && (prev.room.phase === 'draw' || (prev.question && prev.question.no !== q.no));
+      qslot.append(QuestionCard(q, fromDeck && !reduceMotion ? 'deal' : 'fade'));
+    }
     if (!q) return;
-    const fromDeck = prev && (prev.room.phase === 'draw' || (prev.question && prev.question.no !== q.no));
-    qslot.append(QuestionCard(q, fromDeck && !reduceMotion ? 'deal' : 'fade'));
+    // примеряем выбранную карту прямо в вопрос
+    const fill = fillText(st);
+    if (fill === qFill) return;
+    qFill = fill;
+    const qtext = qslot.querySelector('.qtext');
+    if (!qtext) return;
+    qtext.replaceChildren(...questionNodes(q.text, fill));
+    const len = q.text.length + (fill ? fill.length : 0);
+    qtext.classList.toggle('len-m', len > 72 && len <= 112);
+    qtext.classList.toggle('len-l', len > 112);
+    qslot.querySelector('.qcard').classList.toggle('filled', !!fill);
+  }
+
+  function place() {
+    const st = S.state;
+    if (!sel || !st || st.room.phase !== 'write' || isJudge()) return;
+    Sound.ensure();
+    if (send({ t: 'submit', card: sel })) {
+      Sound.play('place');
+      const from = aslot.querySelector('.acard') || hand.el.querySelector('.hcard.sel');
+      const r = from?.getBoundingClientRect();
+      if (r) FX.splash(r.left + r.width / 2, r.top + r.height * 0.6, { count: 16, power: 0.9 });
+      sel = null;
+    }
+  }
+
+  function onPick(id) {
+    const st = S.state;
+    if (!st) return;
+    if (st.room.phase !== 'write' || isJudge()) {
+      hand.nudge(id);
+      return;
+    }
+    Sound.ensure();
+    if (st.myCard === id) sel = null;
+    else if (sel === id) return place();
+    else {
+      sel = id;
+      Sound.play('select');
+    }
+    repaint(st, null);
   }
 
   function paintAnswer(st) {
     const ph = st.room.phase;
     const judge = isJudge();
+    if (sel && !st.myHand.some((c) => c.id === sel)) sel = null;
     let mode;
     if (ph === 'draw') mode = judge ? 'judge-draw' : 'wait-draw';
     else if (judge) mode = 'judge-write';
-    else mode = st.myAnswer != null ? 'placed' : 'edit';
-    if (mode !== aMode) {
-      aMode = mode;
-      aslot.className = mode === 'edit' || mode === 'placed' ? 'aslot' : 'aslot wide';
+    else if (sel && sel !== st.myCard) mode = `preview:${sel}:${st.myCard ? 1 : 0}`;
+    else if (st.myCard) mode = `placed:${st.myCard}`;
+    else mode = 'empty';
+    if (mode !== aKey) {
+      aKey = mode;
+      const wide = mode.startsWith('judge') || mode === 'wait-draw';
+      aslot.className = `aslot${wide ? ' wide' : ''}${mode === 'empty' ? ' is-empty' : ''}`;
       answerUI = null;
       aslot.replaceChildren();
       if (mode === 'judge-draw') {
@@ -1282,7 +1353,7 @@ function PlayStage() {
             'div',
             { class: 'judge-panel' },
             h('h3', {}, 'Ты судья этого раунда'),
-            h('p', {}, 'Вытяни вопрос — нажми на колоду. Потом прочитай его вслух, пока остальные пишут ответы.'),
+            h('p', {}, 'Вытяни вопрос — нажми на колоду. Потом прочитай его вслух, пока остальные выбирают карты.'),
             h('p', { class: 'auto-note' }),
             h(
               'button',
@@ -1299,17 +1370,25 @@ function PlayStage() {
           )
         );
       } else if (mode === 'wait-draw') {
-        aslot.append(h('div', { class: 'judge-panel' }, h('h3', {}, 'Сейчас будет вопрос'), h('p', { class: 'wait-note' }), h('p', {}, 'Когда вопрос появится, напиши на чистой карте самый смешной ответ.')));
+        aslot.append(h('div', { class: 'judge-panel' }, h('h3', {}, 'Сейчас будет вопрос'), h('p', { class: 'wait-note' }), h('p', {}, 'Когда вопрос появится, выбери из своих карт самый смешной ответ.')));
       } else if (mode === 'judge-write') {
         answerUI = JudgeWaitPanel();
         aslot.append(answerUI.el);
-      } else if (mode === 'edit') {
-        answerUI = AnswerEditor(st);
-        aslot.append(answerUI.el);
-        if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => answerUI && answerUI.focus && answerUI.focus(), 700);
-      } else if (mode === 'placed') {
-        answerUI = PlacedAnswer();
-        aslot.append(answerUI.el);
+      } else if (mode === 'empty') {
+        aslot.append(
+          h('div', { class: 'card slot-card' }, h('span', { class: 'cap' }, 'Твой ответ'), h('p', {}, 'Выбери карту из руки — она встанет в вопрос'), h('span', { class: 'slot-arrow', 'aria-hidden': 'true' }, '↓'))
+        );
+      } else if (mode.startsWith('preview')) {
+        const c = st.myHand.find((x) => x.id === sel);
+        const card = h('div', { class: 'card acard preview' }, h('span', { class: 'cap' }, 'Твой ответ'), h('p', { class: 'hand', style: { margin: 0 } }, c ? c.text : ''), h('span', { class: 'meta' }, h('span', {}, 'Судья не узнает, чья карта')));
+        const go = h('button', { class: 'btn btn-primary', id: 'place-btn', type: 'button', onclick: place }, st.myCard ? 'Заменить карту на столе' : 'Положить на стол');
+        const back = h('button', { class: 'btn', type: 'button', 'aria-label': 'Отменить выбор', onclick: () => ((sel = null), repaint(S.state, null)) }, icon('close'));
+        aslot.append(tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, back, go));
+      } else if (mode.startsWith('placed')) {
+        const c = st.myHand.find((x) => x.id === st.myCard);
+        const card = h('div', { class: 'card acard placed' }, h('span', { class: 'cap' }, 'Карта на столе'), h('p', { class: 'hand', style: { margin: 0 } }, c ? c.text : st.myAnswer || ''), h('span', { class: 'stamp' }, 'Принято'));
+        const take = h('button', { class: 'btn', id: 'take-btn', type: 'button', onclick: () => send({ t: 'retract' }) }, icon('refresh'), 'Забрать карту');
+        aslot.append(tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, take));
       }
     }
     if (answerUI && answerUI.update) answerUI.update(st);
@@ -1318,14 +1397,37 @@ function PlayStage() {
     if (waitNote) waitNote.textContent = judgeP ? `${judgeP.name} тянет вопрос из колоды.` : 'Судья тянет вопрос.';
   }
 
+  function repaint(st, prev) {
+    el.classList.toggle('writing', !!st.question);
+    paintDeck(st);
+    paintAnswer(st);
+    paintQuestion(st, prev);
+    hand.update(st, sel);
+  }
+
+  // с клавиатуры: 1–6 — выбрать карту, Enter — положить
+  function hotkey(e) {
+    const st = S.state;
+    if (!st || st.room.phase !== 'write' || isJudge()) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || document.querySelector('dialog[open]')) return;
+    if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    const n = Number(e.key);
+    if (n >= 1 && n <= st.myHand.length) {
+      e.preventDefault();
+      onPick(st.myHand[n - 1].id);
+    } else if (e.key === 'Enter' && sel && e.target.tagName !== 'BUTTON') {
+      e.preventDefault();
+      place();
+    } else if (e.key === 'Escape' && sel) {
+      sel = null;
+      repaint(st, null);
+    }
+  }
+
   return {
     el,
-    update(st, prev) {
-      el.classList.toggle('writing', !!st.question);
-      paintDeck(st);
-      paintQuestion(st, prev);
-      paintAnswer(st);
-    },
+    hotkey,
+    update: repaint,
     tick(st) {
       const note = aslot.querySelector('.auto-note');
       if (note && st.room.phase === 'draw' && st.deadline) {
@@ -1336,81 +1438,119 @@ function PlayStage() {
   };
 }
 
-function AnswerEditor(st) {
-  const round = st.room.round;
-  const draftKey = `${st.room.code}:${round}`;
-  const ta = h('textarea', { id: 'answer', maxlength: 90, rows: 4, placeholder: 'Напиши что-нибудь острое…', 'aria-describedby': 'answer-count' });
-  ta.value = S.drafts[draftKey] || '';
-  const count = h('span', { class: 'count', id: 'answer-count' });
-  const submit = h('button', { class: 'btn btn-primary', type: 'button' }, 'Положить на стол');
-  const clear = h('button', { class: 'btn', type: 'button' }, 'Стереть');
-  const card = h(
-    'div',
-    { class: 'card acard edit' },
-    h('label', { class: 'cap', for: 'answer' }, 'Твой ответ'),
-    ta,
-    h('div', { class: 'meta' }, h('span', {}, 'Судья не увидит, чей ответ'), count)
-  );
-  const el = h('div', { style: { display: 'contents' } }, tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, clear, submit));
-  const paint = () => {
-    const n = ta.value.length;
-    count.textContent = `${n} / 90`;
-    count.classList.toggle('warn', n >= 80);
-    submit.disabled = !ta.value.trim() || !S.open;
-    S.drafts[draftKey] = ta.value;
-  };
-  const doSubmit = () => {
-    const text = ta.value.trim();
-    if (!text) {
-      ta.focus();
-      return;
-    }
-    Sound.ensure();
-    if (send({ t: 'submit', text })) {
-      Sound.play('place');
-      const r = card.getBoundingClientRect();
-      FX.splash(r.left + r.width / 2, r.top + r.height * 0.75, { count: 16, power: 0.9 });
-    }
-  };
-  ta.addEventListener('input', paint);
-  ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      doSubmit();
-    }
-  });
-  clear.addEventListener('click', () => {
-    ta.value = '';
-    paint();
-    ta.focus();
-  });
-  submit.addEventListener('click', doSubmit);
-  paint();
-  return { el, focus: () => ta.focus({ preventScroll: true }), update: paint };
+// длинные слова не должны рваться посреди узкой карты — для них шрифт поменьше
+function wordFit(text) {
+  const longest = Math.max(...String(text).split(/[\s-]+/).map((w) => w.replace(/[,.!?]/g, '').length));
+  return longest >= 13 ? ' xlong' : longest >= 11 ? ' long' : '';
 }
 
-function PlacedAnswer() {
-  const text = h('p', { class: 'hand', style: { margin: 0 } });
-  const card = h('div', { class: 'card acard placed' }, h('span', { class: 'cap' }, 'Твой ответ на столе'), text, h('span', { class: 'stamp' }, 'Принято'));
-  const edit = h(
-    'button',
-    {
-      class: 'btn',
-      type: 'button',
-      onclick: () => {
-        const k = `${S.state.room.code}:${S.state.room.round}`;
-        S.drafts[k] = S.state.myAnswer || '';
-        send({ t: 'retract' });
-      }
-    },
-    icon('pencil'),
-    'Изменить'
-  );
-  const el = h('div', { style: { display: 'contents' } }, tilt(h('div', { class: 'tilt-box' }, card)), h('div', { class: 'btn-row' }, edit));
+// Рука: шесть карт ответов веером под столом.
+function HandZone(onPick) {
+  const row = h('div', { class: 'hand-row' });
+  const hint = h('span', { class: 'hand-hint' });
+  const swapLabel = h('span', {}, 'Сменить все карты');
+  const swapBtn = h('button', { class: 'btn btn-sm swap-btn', type: 'button', title: 'Один раз за партию' }, icon('refresh'), swapLabel);
+  const el = h('section', { class: 'hand-zone', 'aria-label': 'Твои карты' }, h('div', { class: 'hand-head' }, h('span', { class: 'eyebrow' }, 'Твои карты'), hint, swapBtn), row);
+  const nodes = new Map();
+  let armed = 0;
+  let armTimer = 0;
+
+  swapBtn.addEventListener('click', () => {
+    if (Date.now() - armed > 3000) {
+      armed = Date.now();
+      swapLabel.textContent = 'Точно? Нажми ещё раз';
+      swapBtn.classList.add('armed');
+      clearTimeout(armTimer);
+      armTimer = setTimeout(() => {
+        swapLabel.textContent = 'Сменить все карты';
+        swapBtn.classList.remove('armed');
+      }, 3000);
+      return;
+    }
+    armed = 0;
+    clearTimeout(armTimer);
+    swapLabel.textContent = 'Сменить все карты';
+    swapBtn.classList.remove('armed');
+    Sound.ensure();
+    send({ t: 'swap' });
+  });
+
+  function makeCard(c) {
+    const node = h(
+      'button',
+      { class: 'hcard', type: 'button', 'data-card': c.id },
+      h('span', { class: `ht${wordFit(c.text)}` }, c.text),
+      h('span', { class: 'hm' }, h('span', {}, 'ГРЯЗЬ'), h('span', { class: 'hk' })),
+      h('span', { class: 'on-tag' }, 'на столе')
+    );
+    node.addEventListener('click', () => onPick(c.id));
+    node.addEventListener('animationend', (e) => {
+      if (e.animationName === 'handIn') node.classList.remove('in');
+      if (e.animationName === 'nudge') node.classList.remove('nudge');
+    });
+    return node;
+  }
+
   return {
     el,
-    update(st) {
-      text.textContent = st.myAnswer || '';
+    nudge(id) {
+      const node = nodes.get(id);
+      if (!node) return;
+      node.classList.remove('nudge');
+      void node.offsetWidth;
+      node.classList.add('nudge');
+    },
+    update(st, sel) {
+      const ph = st.room.phase;
+      const judge = isJudge();
+      const canPlay = ph === 'write' && !judge;
+      el.classList.toggle('resting', judge);
+      el.classList.toggle('idle', !canPlay);
+      el.hidden = !st.myHand.length;
+      const ids = new Set(st.myHand.map((c) => c.id));
+      for (const [id, node] of nodes) {
+        if (!ids.has(id)) {
+          node.remove();
+          nodes.delete(id);
+        }
+      }
+      const fresh = [];
+      const n = st.myHand.length;
+      st.myHand.forEach((c, i) => {
+        let node = nodes.get(c.id);
+        if (!node) {
+          node = makeCard(c);
+          nodes.set(c.id, node);
+          if (!S.seenCards.has(c.id)) {
+            S.seenCards.add(c.id);
+            fresh.push(node);
+          }
+        }
+        const off = i - (n - 1) / 2;
+        node.style.setProperty('--rot', `${(off * 3.2).toFixed(2)}deg`);
+        node.style.setProperty('--arc', `${(off * off * 3).toFixed(1)}px`);
+        node.querySelector('.hk').textContent = String(i + 1);
+        if (row.children[i] !== node) row.insertBefore(node, row.children[i] || null);
+        const onTable = st.myCard === c.id;
+        node.classList.toggle('sel', sel === c.id && !onTable);
+        node.classList.toggle('on-table', onTable);
+        node.setAttribute('aria-pressed', String(sel === c.id || onTable));
+        node.setAttribute('aria-disabled', String(!canPlay));
+        node.setAttribute('aria-label', `${onTable ? 'На столе: ' : ''}${c.text}`);
+      });
+      if (fresh.length && !reduceMotion) {
+        fresh.forEach((node, k) => {
+          node.style.setProperty('--d', `${k * 90}ms`);
+          node.classList.add('in');
+        });
+        fresh.slice(0, 6).forEach((_, k) => Sound.play('deal', { delay: k * 0.09, gain: 0.55 }));
+      }
+      swapBtn.hidden = !st.swapAvailable;
+      if (judge) hint.textContent = 'Ты судья — в этом раунде карты отдыхают';
+      else if (ph === 'draw') hint.textContent = 'Пока изучи карты — сейчас будет вопрос';
+      else if (st.myCard) hint.textContent = 'Передумал(а)? Выбери другую карту';
+      else if (sel) hint.textContent = 'Нажми на карту ещё раз — и она на столе';
+      else hint.textContent = 'Нажми на карту, чтобы примерить её к вопросу';
     }
   };
 }
@@ -1422,8 +1562,8 @@ function JudgeWaitPanel() {
   const el = h(
     'div',
     { class: 'judge-panel' },
-    h('h3', {}, 'Ты судья — сегодня не пишешь'),
-    h('p', {}, 'Прочитай вопрос вслух. Когда все ответят, карты перевернёшь ты.'),
+    h('h3', {}, 'Ты судья — сегодня без карт'),
+    h('p', {}, 'Прочитай вопрос вслух. Когда все положат карты, переворачивать их будешь ты.'),
     pile,
     line,
     redraw
@@ -1438,7 +1578,7 @@ function JudgeWaitPanel() {
       for (let i = 0; i < total; i++) kids.push(h('span', { class: `mini${i < n ? '' : ' slot'}${i < n && i >= shown ? ' in' : ''}` }));
       pile.replaceChildren(...kids);
       shown = n;
-      line.textContent = `На столе ${n} ${plural(n, ['ответ', 'ответа', 'ответов'])} из ${total}`;
+      line.textContent = `На столе ${n} ${plural(n, ['карта', 'карты', 'карт'])} из ${total}`;
       redraw.hidden = !st.redrawAvailable;
     }
   };
@@ -1459,19 +1599,19 @@ function RevealStage(st0) {
     grid.replaceChildren();
     items.length = 0;
     if (!st.cards.length) {
-      grid.append(h('div', { class: 'empty-round' }, st.result && st.result.empty ? 'Никто не успел ответить — раунд без очков.' : 'Ответов нет.'));
+      grid.append(h('div', { class: 'empty-round' }, st.result && st.result.empty ? 'Никто не сыграл карту — раунд без очков.' : 'Ответов нет.'));
       return;
     }
     st.cards.forEach((c, i) => {
       const back = h('div', { class: 'face back card backcard' }, h('img', { src: '/mark.svg', alt: '' }));
       const textEl = h('p', { class: 'hand', style: { margin: 0 } });
       const mineTag = h('span', { class: 'mine-tag', hidden: true }, 'твой');
-      const front = h('div', { class: 'face front card acard' }, h('span', { class: 'cap' }, `Ответ ${c.letter}`, ' ', mineTag), textEl, h('span', { class: 'meta' }, h('span', {}, 'автор скрыт')));
+      const front = h('div', { class: 'face front card acard' }, h('span', { class: 'cap' }, `Ответ ${c.letter}`, ' ', mineTag), textEl, h('span', { class: 'meta' }, h('span', {}, 'автор скрыт'), h('span', { class: 'auto-tag', hidden: true }, 'легла сама')));
       const flip = h('button', { class: 'flip', type: 'button', 'aria-label': `Перевернуть ответ ${c.letter}` }, h('div', { class: 'inner' }, back, front));
       const action = h('button', { class: 'btn btn-block', type: 'button' });
       const who = h('div', { class: 'who' });
       const box = tilt(h('div', { class: 'ans', style: { animationDelay: `${i * 0.12}s` } }, flip, action, who), 5);
-      const item = { c, box, flip, textEl, mineTag, meta: front.querySelector('.meta span'), front, action, who, flipped: null };
+      const item = { c, box, flip, textEl, mineTag, meta: front.querySelector('.meta span'), autoTag: front.querySelector('.auto-tag'), front, action, who, flipped: null };
       flip.addEventListener('click', () => {
         if (!item.flipped) send({ t: 'flip', index: i });
       });
@@ -1509,7 +1649,8 @@ function RevealStage(st0) {
       it.flip.disabled = !canFlip;
       if (c.text && it.textEl.textContent !== c.text) it.textEl.textContent = c.text;
       it.mineTag.hidden = !c.mine;
-      it.meta.textContent = c.authorName ? c.authorName : c.mine ? 'это твой ответ' : 'автор скрыт';
+      it.meta.textContent = c.authorName ? c.authorName : c.mine ? 'это твоя карта' : 'автор скрыт';
+      it.autoTag.hidden = !c.auto;
       it.flip.setAttribute('aria-label', c.flipped ? `Ответ ${c.letter}: ${c.text || ''}` : `Перевернуть ответ ${c.letter}`);
       if (it.flipped !== c.flipped) {
         // первый показ без анимации, если карта уже открыта
@@ -1647,8 +1788,8 @@ function GameScreen() {
       sub.textContent = judge ? 'Ты судья этого раунда' : `Судья — ${jn}`;
       title.textContent = judge ? 'Тяни вопрос из колоды' : `${jn} тянет вопрос`;
     } else if (ph === 'write') {
-      sub.textContent = judge ? 'Ты судья — сегодня не пишешь' : `Судья — ${jn}`;
-      title.textContent = judge ? 'Прочитай вопрос вслух' : st.myAnswer != null ? 'Ответ на столе — ждём остальных' : 'Напиши свой ответ';
+      sub.textContent = judge ? 'Ты судья — сегодня без карт' : `Судья — ${jn}`;
+      title.textContent = judge ? 'Прочитай вопрос вслух' : st.myAnswer != null ? 'Карта на столе — ждём остальных' : 'Выбери самую смешную карту';
     } else if (ph === 'judge') {
       const left = st.cards.filter((c) => !c.flipped).length;
       sub.textContent = judge ? 'Ты судья этого раунда' : `Судья — ${jn}`;
@@ -1658,8 +1799,8 @@ function GameScreen() {
       const r = st.result || {};
       sub.textContent = 'Итоги раунда';
       if (r.judgeLost) title.textContent = 'Судья пропал — раунд без очков';
-      else if (r.empty || !r.winnerId) title.textContent = 'Никто не успел ответить';
-      else if (r.winnerId === st.me) title.textContent = 'Твой ответ победил! +1 очко';
+      else if (r.empty || !r.winnerId) title.textContent = 'Никто не сыграл карту';
+      else if (r.winnerId === st.me) title.textContent = 'Твоя карта победила! +1 очко';
       else title.textContent = `Очко получает ${r.winnerName}`;
     }
   }
@@ -1685,8 +1826,9 @@ function GameScreen() {
       const waiting = st.players.filter((p) => p.status === 'writing');
       const names = waiting.map((p) => (p.id === st.me ? 'ты' : p.name));
       note.textContent =
-        `На столе ${st.answered} ${plural(st.answered, ['ответ', 'ответа', 'ответов'])} из ${st.expected}` +
-        (waiting.length && waiting.length <= 3 ? ` · ещё ${waiting.length === 1 ? 'пишет' : 'пишут'}: ${names.join(', ').replace(/, ([^,]*)$/, ' и $1')}` : '');
+        `На столе ${st.answered} ${plural(st.answered, ['карта', 'карты', 'карт'])} из ${st.expected}` +
+        (waiting.length && waiting.length <= 3 ? ` · ещё ${waiting.length === 1 ? 'выбирает' : 'выбирают'}: ${names.join(', ').replace(/, ([^,]*)$/, ' и $1')}` : '') +
+        (waiting.some((p) => p.id === st.me) ? ' · не успеешь — ляжет случайная' : '');
     }
   }
 
@@ -1716,6 +1858,7 @@ function GameScreen() {
         S.chosen = null;
         stageView = st.room.phase === 'draw' || st.room.phase === 'write' ? PlayStage() : RevealStage(st);
         stage.replaceChildren(stageView.el);
+        S.hotkeys = stageView.hotkey || null;
         footMode = null;
       }
       stageView.update(st, prev);
@@ -1731,6 +1874,7 @@ function GameScreen() {
       timer.stop();
       clearTimeout(loop);
       loop = 0;
+      S.hotkeys = null;
     }
   };
   return api;
@@ -1815,6 +1959,7 @@ const SCREENS = { entry: EntryScreen, lobby: LobbyScreen, game: GameScreen, fina
 // =====================================================================
 
 addEventListener('pointerdown', () => Sound.ensure(), { once: true, capture: true });
+document.addEventListener('keydown', (e) => S.hotkeys && S.hotkeys(e));
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.ws && S.ws.readyState > 1 && !S.replaced) connect();
 });

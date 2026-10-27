@@ -182,7 +182,9 @@ function createServer({ now = () => Date.now(), tickMs = 250 } = {}) {
       case 'redraw':
         return room.redraw(id);
       case 'submit':
-        return room.submit(id, msg.text);
+        return room.submit(id, msg.card);
+      case 'swap':
+        return room.swapHand(id);
       case 'retract':
         return room.retract(id);
       case 'flip':

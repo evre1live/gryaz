@@ -1,12 +1,13 @@
 'use strict';
 
 const crypto = require('crypto');
-const { DECKS } = require('./decks');
+const { DECKS, ANSWERS } = require('./decks');
 
 const LIMITS = { name: 18, answer: 90, password: 32, players: 10 };
 const MIN_PLAYERS = 3;
 const TARGETS = [5, 7, 10];
-const TIMES = [45, 60, 90];
+const TIMES = [30, 45, 60];
+const HAND_SIZE = 6;
 const COLORS = ['#FFB4A2', '#A7C7E7', '#E9D8A6', '#C9B6F2', '#9ED9C8', '#F7C6DD', '#BFD7A5', '#F2C38F', '#B8C0FF', '#F5F0E6'];
 const LETTERS = 'АБВГДЕЖЗИК'.split('');
 // персонаж игрока — набор маленьких чисел (см. public/avatar.js, там же картинки)
@@ -54,22 +55,25 @@ function shuffle(list, rng) {
 }
 
 class Room {
-  constructor({ code, password = '', now = () => Date.now(), rng = Math.random, decks = DECKS, timing = TIMING } = {}) {
+  constructor({ code, password = '', now = () => Date.now(), rng = Math.random, decks = DECKS, answers = ANSWERS, timing = TIMING } = {}) {
     this.code = code;
     this.password = cleanText(password, LIMITS.password);
     this.now = now;
     this.rng = rng;
     this.decks = decks;
+    this.answerTexts = answers;
     this.timing = timing;
     this.players = new Map();
     this.order = [];
     this.hostId = null;
-    this.settings = { deck: 'adult', target: 10, time: 60 };
+    this.settings = { deck: 'adult', target: 10, time: 45 };
     this.phase = 'lobby';
     this.round = 0;
     this.judgeId = null;
     this.question = null;
     this.deckPool = { clean: [], adult: [] };
+    this.answerPool = [];
+    this.answerPoolDeck = null;
     this.answers = new Map();
     this.cards = [];
     this.redrawUsed = false;
@@ -131,11 +135,15 @@ class Room {
       connected: true,
       joinedRound: this.round,
       avatar: cleanAvatar(avatar),
-      voice: 'off'
+      voice: 'off',
+      hand: [],
+      swapUsed: false
     };
     this.players.set(player.id, player);
     this.order.push(player.id);
     if (!this.hostId) this.hostId = player.id;
+    // пришёл посреди партии — сразу получает свои шесть карт
+    if (this.inGame()) this.fillHand(player);
     this.touch({ type: 'joined', id: player.id, name });
     return player;
   }
@@ -269,7 +277,12 @@ class Room {
     this.requireHost(id);
     if (!['lobby', 'final'].includes(this.phase)) throw new GameError('PHASE', 'Партия уже идёт');
     if (this.connected().length < MIN_PLAYERS) throw new GameError('FEW', `Нужно минимум ${MIN_PLAYERS} игрока`);
-    for (const p of this.players.values()) p.score = 0;
+    for (const p of this.players.values()) {
+      p.score = 0;
+      p.hand = [];
+      p.swapUsed = false;
+    }
+    this.answerPool = [];
     this.round = 0;
     this.result = null;
     this.final = null;
@@ -307,6 +320,7 @@ class Room {
     }
     if (!replay) this.round++;
     if (!replay || !this.judgeId || !this.players.get(this.judgeId)?.connected) this.judgeId = this.nextJudge();
+    for (const pid of this.order) this.fillHand(this.players.get(pid));
     this.phase = 'draw';
     this.question = null;
     this.answers.clear();
@@ -318,6 +332,54 @@ class Room {
     this.deadline = this.now() + this.timing.autoDrawMs;
     if (!replay) this.notice = null;
     this.touch({ type: 'round', round: this.round });
+  }
+
+  // ---------- карты ответов ----------
+
+  inGame() {
+    return ['draw', 'write', 'judge', 'result'].includes(this.phase);
+  }
+
+  cardText(cardId) {
+    return this.answerTexts.get(cardId) || '';
+  }
+
+  drawAnswer() {
+    const deckId = this.settings.deck;
+    if (this.answerPoolDeck !== deckId) {
+      this.answerPool = [];
+      this.answerPoolDeck = deckId;
+    }
+    if (!this.answerPool.length) {
+      // колода кончилась — замешиваем всё, что сейчас не на руках и не на столе
+      const busy = new Set();
+      for (const p of this.players.values()) for (const c of p.hand) busy.add(c);
+      for (const a of this.answers.values()) busy.add(a.cardId);
+      const free = this.decks[deckId].answers.filter((c) => !busy.has(c));
+      this.answerPool = shuffle(free, this.rng);
+    }
+    return this.answerPool.pop() || null;
+  }
+
+  fillHand(p) {
+    if (!p) return;
+    while (p.hand.length < HAND_SIZE) {
+      const card = this.drawAnswer();
+      if (!card) break;
+      p.hand.push(card);
+    }
+  }
+
+  swapHand(id) {
+    const p = this.players.get(id);
+    if (!p) throw new GameError('GONE', 'Вы не в комнате');
+    if (!['draw', 'write'].includes(this.phase)) throw new GameError('PHASE', 'Карты меняются, пока идёт раунд');
+    if (p.swapUsed) throw new GameError('USED', 'Карты уже меняли в этой партии');
+    if (this.answers.has(id)) throw new GameError('LATE', 'Сначала заберите карту со стола');
+    p.swapUsed = true;
+    p.hand = [];
+    this.fillHand(p);
+    this.touch({ type: 'swapped', id });
   }
 
   pullQuestion() {
@@ -356,14 +418,17 @@ class Room {
     return this.connected().filter((p) => p.id !== this.judgeId);
   }
 
-  submit(id, rawText) {
+  submit(id, cardId) {
     if (this.phase !== 'write') throw new GameError('PHASE', 'Время ответов вышло');
     if (id === this.judgeId) throw new GameError('JUDGE', 'Судья в этом раунде не отвечает');
-    if (!this.players.has(id)) throw new GameError('GONE', 'Вы не в комнате');
-    const text = cleanText(rawText, LIMITS.answer);
-    if (!text) throw new GameError('EMPTY', 'Напишите ответ');
-    this.answers.set(id, { text, at: this.now() });
-    this.touch({ type: 'answered', id });
+    const p = this.players.get(id);
+    if (!p) throw new GameError('GONE', 'Вы не в комнате');
+    const card = String(cardId == null ? '' : cardId);
+    if (!p.hand.includes(card)) throw new GameError('CARD', 'Такой карты у вас нет');
+    const was = this.answers.get(id);
+    if (was && was.cardId === card) return;
+    this.answers.set(id, { cardId: card, text: this.cardText(card), at: this.now() });
+    this.touch({ type: was ? 'changed' : 'answered', id });
     this.checkAllAnswered();
   }
 
@@ -385,6 +450,17 @@ class Room {
   }
 
   openJudging() {
+    // время вышло — за тех, кто не успел, карта ложится случайно
+    for (const p of this.writers()) {
+      if (this.answers.has(p.id) || !p.hand.length) continue;
+      const card = p.hand[Math.floor(this.rng() * p.hand.length)];
+      this.answers.set(p.id, { cardId: card, text: this.cardText(card), at: this.now(), auto: true });
+    }
+    // сыгранные карты уходят из руки, добор — в начале следующего раунда
+    for (const [pid, a] of this.answers) {
+      const p = this.players.get(pid);
+      if (p) p.hand = p.hand.filter((c) => c !== a.cardId);
+    }
     const entries = [...this.answers.entries()].filter(([pid]) => this.players.has(pid));
     if (!entries.length) {
       this.phase = 'result';
@@ -397,6 +473,8 @@ class Room {
     this.cards = shuffle(entries, this.rng).map(([pid, a], i) => ({
       letter: LETTERS[i],
       text: a.text,
+      cardId: a.cardId,
+      auto: !!a.auto,
       authorId: pid,
       flipped: false
     }));
@@ -480,7 +558,11 @@ class Room {
     this.result = null;
     this.final = null;
     this.notice = null;
-    for (const p of this.players.values()) p.score = 0;
+    for (const p of this.players.values()) {
+      p.score = 0;
+      p.hand = [];
+      p.swapUsed = false;
+    }
     this.round = 0;
     this.touch({ type: 'lobby' });
   }
@@ -553,6 +635,10 @@ class Room {
       question: this.phase === 'draw' || this.phase === 'lobby' ? null : this.question,
       deadline: this.deadline,
       myAnswer: me && this.answers.has(me.id) ? this.answers.get(me.id).text : null,
+      myCard: me && this.answers.has(me.id) ? this.answers.get(me.id).cardId : null,
+      myHand: me && this.inGame() ? me.hand.map((c) => ({ id: c, text: this.cardText(c) })) : [],
+      handSize: HAND_SIZE,
+      swapAvailable: !!me && !me.swapUsed && ['draw', 'write'].includes(this.phase) && !this.answers.has(me.id) && me.hand.length > 0,
       answered: this.phase === 'write' ? writers.filter((p) => this.answers.has(p.id)).length : this.answers.size,
       expected: this.phase === 'write' ? writers.length : this.answers.size,
       redrawAvailable: this.phase === 'write' && !this.redrawUsed && this.answers.size === 0,
@@ -563,6 +649,7 @@ class Room {
             flipped: c.flipped,
             text: c.flipped ? c.text : null,
             mine: !!me && c.authorId === me.id && (revealAuthors || c.flipped),
+            auto: revealAuthors ? c.auto : false,
             authorId: revealAuthors ? c.authorId : null,
             authorName: revealAuthors ? this.players.get(c.authorId)?.name || 'ушёл' : null
           }))
@@ -582,4 +669,4 @@ function makeCode(existing, rng = Math.random) {
   throw new GameError('BUSY', 'Сервер переполнен, попробуйте позже');
 }
 
-module.exports = { Room, GameError, makeCode, cleanText, cleanAvatar, AVATAR_SPEC, LIMITS, MIN_PLAYERS, TARGETS, TIMES, TIMING };
+module.exports = { Room, GameError, makeCode, cleanText, cleanAvatar, AVATAR_SPEC, LIMITS, MIN_PLAYERS, TARGETS, TIMES, TIMING, HAND_SIZE };

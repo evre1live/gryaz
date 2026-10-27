@@ -102,10 +102,14 @@ test('по сети: комната, пароль, полная партия-р�
     assert.ok(host.state.question.text);
 
     const writers = clients.filter((c) => c !== judge);
-    writers[0].send({ t: 'submit', text: 'первый ответ' });
+    assert.equal(writers[0].state.myHand.length, 6);
+    const firstCard = writers[0].state.myHand[0];
+    writers[0].send({ t: 'submit', card: 'нет-такой' });
+    assert.equal((await writers[0].wait((m) => m.t === 'error' && m.for === 'submit')).code, 'CARD');
+    writers[0].send({ t: 'submit', card: firstCard.id });
     await writers[1].wait((m) => m.t === 'state' && m.answered === 1);
     assert.equal(writers[1].state.myAnswer, null);
-    assert.ok(!JSON.stringify(writers[1].state).includes('первый ответ'), 'чужой ответ утёк');
+    assert.ok(!JSON.stringify(writers[1].state).includes(firstCard.text), 'чужой ответ утёк');
 
     // реконнект посреди раунда: второй писатель закрывает вкладку и возвращается
     const token = writers[1] === guest ? gJoined.token : null;
@@ -119,7 +123,10 @@ test('по сети: комната, пароль, полная партия-р�
       clients[1] = back;
       writers[1] = back;
     }
-    writers[1].send({ t: 'submit', text: 'второй ответ' });
+    assert.equal(writers[1].state.myHand.length, 6, 'рука пережила переподключение');
+    writers[1].send({ t: 'swap' });
+    await writers[1].wait((m) => m.t === 'state' && m.swapAvailable === false);
+    writers[1].send({ t: 'submit', card: writers[1].state.myHand[5].id });
     await judge.wait((m) => m.t === 'state' && m.room.phase === 'judge', 4000);
     assert.equal(judge.state.cards.length, 2);
     assert.ok(judge.state.cards.every((c) => c.text === null));

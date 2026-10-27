@@ -19,7 +19,6 @@
   --cream-muted: #6b6258;
   --display: 'Unbounded', 'Golos Text', system-ui, sans-serif;
   --body: 'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --hand: 'Caveat', 'Comic Sans MS', cursive;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --spring: cubic-bezier(0.3, 1.35, 0.5, 1);
   --cw: clamp(230px, 24vw, 290px);
@@ -246,7 +245,7 @@ button:disabled { cursor: not-allowed; }
 .blank { display: inline-block; min-width: 3.4em; border-bottom: 3px solid currentColor; transform: translateY(-0.2em); margin: 0 0.1em; }
 .acard { background: var(--cream); color: var(--cream-ink); }
 .acard .cap, .acard .meta { color: var(--cream-muted); }
-.hand { font-family: var(--hand); font-weight: 700; font-size: clamp(28px, 2.6vw, 34px); line-height: 1.12; overflow-wrap: anywhere; }
+.hand { font-family: var(--body); font-weight: 700; font-size: clamp(21px, 1.9vw, 26px); line-height: 1.18; letter-spacing: -0.01em; overflow-wrap: break-word; }
 .backcard {
   background: #1c1c20; border: 1px solid var(--line-3);
   box-shadow: inset 0 0 0 10px #1c1c20, inset 0 0 0 11px var(--red), 0 20px 44px rgba(0, 0, 0, 0.5);
@@ -283,16 +282,16 @@ button:disabled { cursor: not-allowed; }
 
 .aslot { display: flex; flex-direction: column; align-items: center; gap: 20px; width: var(--cw); flex: none; }
 .aslot.wide { width: auto; max-width: 340px; flex: 1 1 280px; align-items: stretch; }
-.acard.edit { transform: rotate(1.5deg); animation: liftIn 700ms 120ms var(--ease) both; }
-@keyframes liftIn { from { opacity: 0; transform: translateY(34px) rotate(5deg); } to { opacity: 1; transform: rotate(1.5deg); } }
-.acard textarea {
-  flex: 1; resize: none; border: 0; background: transparent; padding: 0; margin: 0; color: var(--cream-ink);
-  font-family: var(--hand); font-weight: 700; font-size: clamp(28px, 2.6vw, 36px); line-height: 1.12; min-height: 0;
+.acard.preview { transform: rotate(1.5deg); animation: liftIn 520ms var(--spring) both; }
+@keyframes liftIn { from { opacity: 0; transform: translateY(60px) rotate(6deg) scale(0.9); } to { opacity: 1; transform: rotate(1.5deg); } }
+.slot-card {
+  background: transparent; border: 2px dashed var(--line-3); box-shadow: none; color: var(--muted);
+  align-items: center; justify-content: center; text-align: center; animation: fadeUp 500ms var(--ease) both;
 }
-.acard textarea::placeholder { color: #9b9187; }
-.acard textarea:focus { outline: none; }
-.acard:focus-within { box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55), 0 0 0 3px rgba(244, 241, 234, 0.5); }
-.acard .count.warn { color: var(--red); font-weight: 600; }
+.slot-card .cap { position: absolute; top: 24px; left: 0; right: 0; color: var(--faint); }
+.slot-card p { margin: 0; font-size: 15px; max-width: 18ch; }
+.slot-arrow { font-size: 28px; color: var(--red); animation: hop 1.6s ease-in-out infinite; }
+@keyframes hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
 .acard.placed { transform: rotate(-1deg); animation: place 600ms var(--spring) both; }
 @keyframes place { 0% { transform: translateY(-30px) rotate(6deg) scale(1.05); } 100% { transform: rotate(-1deg); } }
 .stamp {
@@ -305,6 +304,55 @@ button:disabled { cursor: not-allowed; }
 .aslot .btn-row { flex-wrap: nowrap; width: 100%; gap: 10px; }
 .aslot .btn-row .btn { padding: 0 16px; }
 .aslot .btn-row .btn-primary { flex: 1; }
+
+/* ответ, примеренный к вопросу */
+.qcard q {
+  quotes: none; white-space: normal; background: var(--cream); color: var(--cream-ink); border-radius: 6px; padding: 0 0.22em;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; animation: qfill 380ms var(--spring) both;
+}
+@keyframes qfill { from { opacity: 0; background: #fff; } to { opacity: 1; } }
+.qtext.len-m { font-size: clamp(16px, 1.6vw, 20px); }
+.qtext.len-l { font-size: clamp(14px, 1.3vw, 17px); }
+
+/* рука */
+.play { row-gap: 26px; }
+.play .qslot, .play .aslot { --cw: clamp(200px, 19vw, 250px); }
+.play .qslot .qcard, .play .aslot .card { padding: 22px; }
+.hand-zone { flex: 1 0 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; animation: rise 600ms 100ms var(--ease) both; }
+.hand-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px; min-height: 36px; }
+.hand-hint { font-size: 14px; color: var(--muted); }
+.swap-btn { min-height: 36px; padding: 0 14px; font-size: 13px; color: var(--muted); }
+.swap-btn .icon { width: 16px; height: 16px; }
+.swap-btn.armed { border-color: var(--red); color: var(--ink); }
+.hand-row { display: flex; justify-content: center; align-items: flex-start; padding: 28px 24px 8px; max-width: 100%; }
+.hcard {
+  --w: clamp(128px, 10.6vw, 144px);
+  position: relative; flex: none; width: var(--w); aspect-ratio: 63 / 84; margin: 0 -9px; padding: 14px 13px 12px;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 8px; text-align: left;
+  border: 0; border-radius: 14px; background: var(--cream); color: var(--cream-ink);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  transform: translateY(var(--arc, 0)) rotate(var(--rot, 0));
+  transition: transform 260ms var(--ease), box-shadow 260ms, opacity 260ms, filter 260ms;
+}
+.hcard .ht { font-weight: 700; font-size: clamp(14px, 1.15vw, 16px); line-height: 1.2; letter-spacing: -0.01em; overflow-wrap: break-word; }
+.hcard .ht.long { font-size: clamp(13px, 1.05vw, 14.5px); }
+.hcard .ht.xlong { font-size: clamp(11.5px, 0.92vw, 13px); letter-spacing: -0.02em; }
+.hcard .hm { display: flex; justify-content: space-between; font-size: 9px; font-weight: 700; letter-spacing: 0.16em; color: var(--cream-muted); }
+.hcard .hk { letter-spacing: 0; opacity: 0.7; }
+.hcard .on-tag {
+  display: none; position: absolute; left: 50%; top: -12px; transform: translateX(-50%); white-space: nowrap;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #fff; background: var(--red); border-radius: 999px; padding: 4px 9px;
+}
+.hand-zone:not(.idle) .hcard:hover:not(.on-table), .hcard:focus-visible { transform: translateY(-18px) rotate(0deg) scale(1.04); z-index: 4; box-shadow: 0 26px 46px rgba(0, 0, 0, 0.6); }
+.hcard.sel { transform: translateY(-30px) rotate(0deg) scale(1.07) !important; z-index: 5; box-shadow: 0 0 0 3px var(--red), 0 28px 56px rgba(200, 16, 46, 0.42) !important; }
+.hcard.on-table { opacity: 0.55; filter: saturate(0.6); transform: translateY(calc(var(--arc, 0) + 16px)) rotate(var(--rot, 0)) scale(0.96); }
+.hcard.on-table .on-tag { display: block; }
+.hand-zone.idle .hcard { cursor: default; }
+.hand-zone.resting .hcard { filter: grayscale(0.5) brightness(0.7); }
+.hcard.in { animation: handIn 620ms var(--spring) both; animation-delay: var(--d, 0ms); }
+@keyframes handIn { from { opacity: 0; translate: 0 -160px; rotate: -24deg; scale: 0.55; } to { opacity: 1; translate: 0 0; rotate: 0deg; scale: 1; } }
+.hcard.nudge { animation: nudge 420ms var(--ease); }
+@keyframes nudge { 25% { translate: -6px 0; } 50% { translate: 6px 0; } 75% { translate: -3px 0; } }
 .sub-round { display: none; }
 .deco { z-index: 0; }
 .entry > :not(.deco) { z-index: 1; }
@@ -339,7 +387,8 @@ button.flip:disabled { cursor: default; }
 .flip .face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; border-radius: 16px; }
 .flip .face.back { width: auto; aspect-ratio: auto; }
 .flip .face.front { transform: rotateY(180deg); width: auto; aspect-ratio: auto; padding: 20px; }
-.flip .face.front .hand { font-size: clamp(22px, 2.1vw, 29px); }
+.flip .face.front .hand { font-size: clamp(17px, 1.55vw, 21px); }
+.auto-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--red); }
 button.flip:not(.on):not(:disabled):hover .inner { transform: translateY(-8px) rotateY(-10deg); }
 .flip.on.chosen .face.front { box-shadow: 0 0 0 3px var(--red), 0 24px 60px rgba(200, 16, 46, 0.45); animation: glow 2s ease-in-out infinite; }
 @keyframes glow { 0%, 100% { box-shadow: 0 0 0 3px var(--red), 0 24px 50px rgba(200, 16, 46, 0.35); } 50% { box-shadow: 0 0 0 3px var(--red), 0 24px 70px rgba(200, 16, 46, 0.6); } }
@@ -353,7 +402,7 @@ button.flip:not(.on):not(:disabled):hover .inner { transform: translateY(-8px) r
 .mine-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--red); }
 .empty-round { width: 100%; padding: 40px; text-align: center; border: 1px dashed var(--line-3); border-radius: 22px; color: var(--muted); }
 .winner-line { width: 100%; text-align: center; font-size: 18px; color: var(--muted); animation: rise 600ms 200ms var(--ease) both; }
-.winner-line q { font-family: var(--hand); font-weight: 700; font-size: 30px; color: var(--ink); quotes: none; }
+.winner-line q { white-space: normal; font-weight: 700; font-size: 22px; color: var(--ink); quotes: none; }
 
 /* реакции */
 .react-bar { display: flex; gap: 8px; justify-content: center; }
@@ -378,7 +427,7 @@ button.flip:not(.on):not(:disabled):hover .inner { transform: translateY(-8px) r
 .pair .qcard { transform: rotate(-6deg); animation: rise 700ms 200ms var(--ease) both; }
 .pair .acard { margin-left: -12px; transform: rotate(5deg); animation: rise 700ms 360ms var(--ease) both; }
 .pair .qtext { font-size: 18px; }
-.pair .hand { font-size: 29px; }
+.pair .hand { font-size: 21px; }
 .board { list-style: none; margin: 0; padding: 0; width: min(360px, 90vw); display: flex; flex-direction: column; gap: 8px; }
 .board li { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); animation: rise 600ms var(--ease) both; }
 .board li.first { background: #2a1218; border-color: rgba(200, 16, 46, 0.5); }
@@ -421,7 +470,6 @@ dialog.modal[open] { animation: rise 300ms var(--ease) both; }
   .play.writing .deck { display: none; }
   .play.writing .qslot .qcard { position: relative; inset: auto; width: 100%; aspect-ratio: auto; min-height: 140px; transform: none; padding: 20px 22px; }
   .play.writing .qslot .qcard.deal, .play.writing .qslot .qcard.fade { animation: rise 500ms var(--ease) both; }
-  .aslot .acard.edit, .aslot .acard.placed { min-height: 210px; }
   .game { padding: 14px 14px 28px; gap: 18px; flex-direction: column; flex-wrap: nowrap; }
   .players { flex: none; }
   .players .eyebrow { display: none; }
@@ -439,13 +487,28 @@ dialog.modal[open] { animation: rise 300ms var(--ease) both; }
   .play { gap: 28px; }
   .qslot { --cw: min(220px, 60vw); }
   .aslot { --cw: min(340px, 92vw); }
-  .aslot .acard.edit, .aslot .acard.placed { aspect-ratio: auto; }
+  .play.writing .hand-zone { order: 2; }
+  .play.writing .aslot:not(.wide) { order: 3; }
+  .aslot:not(.wide) .tilt-box, .aslot.is-empty { display: none; }
+  .hand-zone { width: 100%; }
+  .hand-head { justify-content: space-between; width: 100%; }
+  .hand-head .eyebrow { display: none; }
+  .hand-hint { font-size: 13px; flex: 1 1 180px; }
+  .hand-row { justify-content: flex-start; width: calc(100% + 28px); margin: 0 -14px; padding: 34px 14px 14px; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; scroll-padding: 14px; scrollbar-width: none; }
+  .hand-row::-webkit-scrollbar { display: none; }
+  .hcard { --w: 132px; margin: 0; scroll-snap-align: start; transform: none; padding: 12px 11px 10px; }
+  .hcard .ht { font-size: 15px; }
+  .hcard .ht.long { font-size: 13.5px; }
+  .hcard .ht.xlong { font-size: 12px; }
+  .hand-zone:not(.idle) .hcard:hover:not(.on-table) { transform: none; box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5); }
+  .hcard.sel { transform: translateY(-18px) !important; }
+  .hcard.on-table { transform: translateY(8px) scale(0.96); }
   .aslot.wide { max-width: none; flex: none; width: 100%; }
   .reveal { gap: 20px; flex-direction: column; align-items: center; }
   .reveal .qcard.small { --cw: min(300px, 84vw); aspect-ratio: auto; min-height: 150px; }
   .answers { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; flex: none; }
   .flip .face.front { padding: 14px; }
-  .flip .face.front .hand { font-size: 21px; }
+  .flip .face.front .hand { font-size: 17px; }
   .card { padding: 20px; }
   .lobby-body { padding: 22px 14px; gap: 22px; }
   .seats { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
@@ -453,7 +516,7 @@ dialog.modal[open] { animation: rise 300ms var(--ease) both; }
   .panel { padding: 22px; }
   .pair .card { --cw: 170px; padding: 16px; }
   .pair .qtext { font-size: 15px; }
-  .pair .hand { font-size: 23px; }
+  .pair .hand { font-size: 17px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
